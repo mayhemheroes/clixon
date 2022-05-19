@@ -34,6 +34,16 @@
 * [3.3.2](#332) Aug 27 2017
 * [3.3.1](#331) June 7 2017
 
+### New features
+
+* Experimental text syntax parser/loader
+  * Added new text syntax parsing and loading from CLI
+  * Unified text output functions to `xml2txt` and moved to clixon_text_syntax.[ch]
+    * The following are removed: `cli_xml2txt` and `xml2txt_cb`
+  * Text output format changed:
+    * Namespace/modulename added to top-level
+  * See [Support performant load_config_file(...) for TEXT format](https://github.com/clicon/clixon/issues/324)
+	
 ## 5.7.0
 17 May 2022
 

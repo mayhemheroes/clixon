@@ -506,7 +506,7 @@ cli_show_config1(clicon_handle h,
     case FORMAT_TEXT:
 	xc = NULL; /* Dont print xt itself */
 	while ((xc = xml_child_each(xt, xc, -1)) != NULL)
-	    cli_xml2txt(xc, cligen_output, 0); /* tree-formed text */
+	    xml2txt(xc, cligen_output, stdout, 0); /* tree-formed text */
 	break;
     case FORMAT_CLI:
 	xc = NULL; /* Dont print xt itself */
@@ -792,7 +792,7 @@ cli_show_generated(clicon_handle h,
 		    xml2json_cb(stdout, xp_helper, 1, cligen_output);
 		    break;
 		case FORMAT_TEXT:	
-		    cli_xml2txt(xp_helper, cligen_output, 0);  /* tree-formed text */
+		    xml2txt(xp_helper, cligen_output, stdout, 0);  /* tree-formed text */
 		    break;
 		default: /* see cli_show_config() */
 		    break;
@@ -989,7 +989,7 @@ cli_pagination(clicon_handle h,
 		xml2json_cb(stdout, xc, 1, cligen_output);
 		break;
 	    case FORMAT_TEXT:
-		xml2txt_cb(stdout, xc, cligen_output); /* tree-formed text */
+		xml2txt(xc, cligen_output, stdout, 0); /* tree-formed text */
 		break;
 	    case FORMAT_CLI:
 		/* hardcoded to compress and list-keyword = nokey */
@@ -1038,7 +1038,6 @@ cli_pagination(clicon_handle h,
  * @param[in] xn       XML Parse-tree (to translate)
  * @param[in] prepend  Print this text in front of all commands.
  * @param[in] fn       Callback to make print function
- * @see xml2cli  XXX should probably use the generic function
  */
 int
 xml2cli(clicon_handle    h,

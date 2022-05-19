@@ -67,7 +67,7 @@
 #include "clixon/clixon.h"
 
 /* Command line options passed to getopt(3) */
-#define UTIL_XML_OPTS "hD:f:Jjl:pvoy:Y:t:T:u"
+#define UTIL_XML_OPTS "hD:f:JjXl:pvoy:Y:t:T:u"
 
 static int
 validate_tree(clicon_handle h,
@@ -118,6 +118,7 @@ usage(char *argv0)
 	    "\t-f <file>\tXML input file (overrides stdin)\n"
 	    "\t-J \t\tInput as JSON\n"
 	    "\t-j \t\tOutput as JSON\n"
+	    "\t-X \t\tOutput as TEXT \n"
 	    "\t-l <s|e|o> \tLog on (s)yslog, std(e)rr, std(o)ut (stderr is default)\n"
 	    "\t-o \t\tOutput the file\n"
 	    "\t-v \t\tValidate the result in terms of Yang model (requires -y)\n"
@@ -145,6 +146,7 @@ main(int    argc,
     int           logdst = CLICON_LOG_STDERR;
     int           jsonin = 0;
     int           jsonout = 0;
+    int           textout = 0;
     char         *input_filename = NULL;
     char         *top_input_filename = NULL;
     char         *yang_file_dir = NULL;
@@ -196,6 +198,9 @@ main(int    argc,
 	    break;
 	case 'j':
 	    jsonout++;
+	    break;
+	case 'X':
+	    textout++;
 	    break;
 	case 'l': /* Log destination: s|e|o|f */
 	    if ((logdst = clicon_log_opt(optarg[0])) < 0)
@@ -335,23 +340,20 @@ main(int    argc,
 	if (validate_tree(h, xt, yspec) < 0)
 	    goto done;
     }
-    /* 4. Output data (xml/json) */
+    /* 4. Output data (xml/json/text) */
     if (output){
-#if 0
-	if (jsonout)
-	    xml2json_cbuf(cb, xt, pretty); /* print json */
-	else
-	    clicon_xml2cbuf(cb, xt, 0, pretty, -1); /* print xml */
-#else
 	xc = NULL;
 	/* XXX This is troublesome for JSON top-level lists */
 	while ((xc = xml_child_each(xt, xc, -1)) != NULL){
-	    if (jsonout)
+	    if (textout){
+		if (xml2txt(xc, fprintf, stdout, 0) < 0)
+		    goto done;
+	    }
+	    else if (jsonout)
 		xml2json_cbuf(cb, xc, pretty); /* print json */
 	    else
 		clicon_xml2cbuf(cb, xc, 0, pretty, -1); /* print xml */
 	}
-#endif
 	fprintf(stdout, "%s", cbuf_get(cb));
 	fflush(stdout);
     }
