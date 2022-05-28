@@ -1,5 +1,5 @@
 project: rnshah9/clixon
-target: clixon
+target: clixon-cli
 
 cmds:
   - cmd: /clixon/clixon/apps/cli/clixon_cli -f @@
