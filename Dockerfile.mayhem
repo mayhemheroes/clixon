@@ -1,4 +1,4 @@
-FROM alpine
+FROM alpine as builder
 
 # For clixon and cligen
 RUN apk add --update git make build-base gcc flex bison curl-dev
@@ -35,3 +35,12 @@ RUN ./configure --prefix=/clixon/build --with-cligen=/clixon/build --with-restco
 RUN make
 RUN make install
 ENV LD_LIBRARY_PATH=/clixon/build/lib
+
+RUN mkdir -p /deps
+RUN ldd /clixon/clixon/apps/cli/clixon_cli | tr -s '[:blank:]' '\n' | grep '^/' | xargs -I % sh -c 'cp % /deps;'
+
+FROM alpine as package
+
+COPY --from=builder /deps /deps
+COPY --from=builder /clixon/clixon/apps/cli/clixon_cli /clixon/clixon/apps/cli/clixon_cli
+ENV LD_LIBRARY_PATH=/deps
