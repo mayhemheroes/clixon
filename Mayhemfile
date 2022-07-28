@@ -2,5 +2,5 @@ project: clixon
 target: clixon-cli
 
 cmds:
-  - cmd: /clixon/clixon/apps/cli/clixon_cli -f /test.xml
+  - cmd: /clixon_cli -f @@
     filepath: /test.xml
