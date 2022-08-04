@@ -353,8 +353,6 @@ netconf_edit_config(clicon_handle h,
 
 /*! Get running configuration and device state information
  * 
- *
-
  * @param[in]  h       Clicon handle
  * @param[in]  xn      Sub-tree (under xorig) at <rpc>...</rpc> level.
  * @param[out] xret    Return XML, error or OK
@@ -481,7 +479,7 @@ netconf_notification_cb(int   s,
 	clicon_err(OE_PLUGIN, errno, "cbuf_new");
 	goto done;
     }
-    if (clicon_xml2cbuf(cb, xn, 0, 0, -1) < 0)
+    if (clixon_xml2cbuf(cb, xn, 0, 0, -1, 0) < 0)
 	goto done;
     /* Send it to listening client on stdout */
     if (netconf_output_encap(clicon_option_int(h, "netconf-framing"), cb) < 0){
@@ -659,7 +657,7 @@ netconf_application_rpc(clicon_handle h,
 	    if (ret > 0 && (ret = xml_yang_validate_add(h, xoutput, &xerr)) < 0)
 		goto done;
 	    if (ret == 0){
-		if (clicon_xml2cbuf(cbret, xerr, 0, 0, -1) < 0)
+		if (clixon_xml2cbuf(cbret, xerr, 0, 0, -1, 0) < 0)
 		    goto done;		
 		clicon_log(LOG_WARNING, "Errors in output netconf %s", cbuf_get(cbret));
 		goto ok;
@@ -726,7 +724,9 @@ netconf_rpc_dispatch(clicon_handle h,
 	    strcmp(xml_name(xe), "validate") == 0 ||  /* :validate */
 	    strcmp(xml_name(xe), "commit") == 0 || /* :candidate */
 	    strcmp(xml_name(xe), "cancel-commit") == 0 || 
-	    strcmp(xml_name(xe), "discard-changes") == 0){
+	    strcmp(xml_name(xe), "discard-changes") == 0 ||
+	    strcmp(xml_name(xe), "action") == 0
+	    ){
 	    if (clicon_rpc_netconf_xml(h, xml_parent(xe), xret, NULL) < 0)
 		goto done;	
 	}

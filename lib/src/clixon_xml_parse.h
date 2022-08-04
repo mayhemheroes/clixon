@@ -58,6 +58,9 @@ struct clixon_xml_parse_yacc {
 };
 typedef struct clixon_xml_parse_yacc clixon_xml_yacc;
 
+/*
+ * Variables
+ */
 extern char *clixon_xml_parsetext;
 
 /*

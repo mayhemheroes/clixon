@@ -229,6 +229,7 @@ int       yang_stats(yang_stmt *y, uint64_t *nrp, size_t *szp);
 yang_stmt *yspec_new(void);
 yang_stmt *ys_new(enum rfc_6020 keyw);
 yang_stmt *ys_prune(yang_stmt *yp, int i);
+int        ys_prune_self(yang_stmt *ys);
 int        ys_free1(yang_stmt *ys, int self);
 int        ys_free(yang_stmt *ys);
 int        ys_cp(yang_stmt *nw, yang_stmt *old);
@@ -282,5 +283,7 @@ int        yang_extension_value(yang_stmt *ys, char *name, char *ns, int *exist,
 int        yang_sort_subelements(yang_stmt *ys);
 int        yang_init(clicon_handle h);
 int        yang_single_child_type(yang_stmt *ys, enum rfc_6020 subkeyw);
+void      *yang_action_cb_get(yang_stmt *ys);
+int        yang_action_cb_add(yang_stmt *ys, void *rc);
 
 #endif  /* _CLIXON_YANG_H_ */

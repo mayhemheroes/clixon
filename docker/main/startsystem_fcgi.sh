@@ -44,7 +44,8 @@ set -ux # e but clixon_backend may fail if test is run in parallell
 
 >&2 echo "$0"
 
-DBG=${DBG:-0}
+# If set, enable debugging (of backend and restconf daemons)
+: ${DBG:=0}
 
 # Initiate clixon configuration (env variable)
 echo "$CONFIG" > /usr/local/etc/clixon.xml
@@ -129,6 +130,10 @@ chmod g+w /www-data/fastcgi_restconf.sock
 # therefore test starts need to be delayed slightly
 /usr/local/sbin/clixon_backend -D $DBG -s running -l e # logs on docker logs
 >&2 echo "clixon_backend started"
+
+# Start snmpd, we need this for the SNMP tests and the app clixon_snmp. Log to stdout, then we can
+# use Docker logs to see what's happening.
+snmpd -Lo -p /var/run/snmpd.pid -I -ifXTable -I -ifTable -I -system_mib -I -sysORTable -I -snmpNotifyFilterTable -I -snmpNotifyTable -I -snmpNotifyFilterProfileTable
 
 # Alt: let backend be in foreground, but test scripts may
 # want to restart backend

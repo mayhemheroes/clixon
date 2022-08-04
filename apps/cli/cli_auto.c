@@ -125,195 +125,6 @@ cvec_append(cvec *cvv0,
     return cvv2;
 }
 
-/*! x is element and has exactly one child which in turn has none 
- * @see child_type in clixon_json.c
- */
-static int
-tleaf(cxobj *x)
-{
-    cxobj *xc;
-
-    if (xml_type(x) != CX_ELMNT)
-	return 0;
-    if (xml_child_nr_notype(x, CX_ATTR) != 1)
-	return 0;
-    /* From here exactly one noattr child, get it */
-    xc = NULL;
-    while ((xc = xml_child_each(x, xc, -1)) != NULL)
-	if (xml_type(xc) != CX_ATTR)
-	    break;
-    if (xc == NULL)
-	return -1; /* n/a */
-    return (xml_child_nr_notype(xc, CX_ATTR) == 0);
-}
-
-/*! Print an XML tree structure from an auto-cli env to stdout and encode chars "<>&"
- *
- * @param[in]   xn          clicon xml tree
- * @param[in]   level       how many spaces to insert before each line
- * @param[in]   prettyprint insert \n and spaces tomake the xml more readable.
- * @param[in]   fn          Callback to make print function
- * @see clicon_xml2cbuf
- * One can use clicon_xml2cbuf to get common code, but using fprintf is
- * much faster than using cbuf and then printing that,...
- */
-int
-cli_xml2file(cxobj            *xn,
-	     int               level,
-	     int               prettyprint,
-	     clicon_output_cb *fn)
-{
-    int    retval = -1;
-    char  *name;
-    char  *namespace;
-    cxobj *xc;
-    int    hasbody;
-    int    haselement;
-    char  *val;
-    char  *encstr = NULL; /* xml encoded string */
-    int    exist = 0;
-
-    if (xn == NULL)
-	goto ok;
-    if (yang_extension_value(xml_spec(xn), "hide-show", CLIXON_AUTOCLI_NS, &exist, NULL) < 0)
-	goto done;
-    if (exist)
-	goto ok;
-    name = xml_name(xn);
-    namespace = xml_prefix(xn);
-    switch(xml_type(xn)){
-    case CX_BODY:
-	if ((val = xml_value(xn)) == NULL) /* incomplete tree */
-	    break;
-	if (xml_chardata_encode(&encstr, "%s", val) < 0)
-	    goto done;
-	(*fn)(stdout, "%s", encstr);
-	break;
-    case CX_ATTR:
-	(*fn)(stdout, " ");
-	if (namespace)
-	    (*fn)(stdout, "%s:", namespace);
-	(*fn)(stdout, "%s=\"%s\"", name, xml_value(xn));
-	break;
-    case CX_ELMNT:
-	(*fn)(stdout, "%*s<", prettyprint?(level*3):0, "");
-	if (namespace)
-	    (*fn)(stdout, "%s:", namespace);
-	(*fn)(stdout, "%s", name);
-	hasbody = 0;
-	haselement = 0;
-	xc = NULL;
-	/* print attributes only */
-	while ((xc = xml_child_each(xn, xc, -1)) != NULL) {
-	    switch (xml_type(xc)){
-	    case CX_ATTR:
-		if (cli_xml2file(xc, level+1, prettyprint, fn) <0)
-		    goto done;
-		break;
-	    case CX_BODY:
-		hasbody=1;
-		break;
-	    case CX_ELMNT:
-		haselement=1;
-		break;
-	    default:
-		break;
-	    }
-	}
-	/* Check for special case <a/> instead of <a></a>:
-	 * Ie, no CX_BODY or CX_ELMNT child.
-	 */
-	if (hasbody==0 && haselement==0) 
-	    (*fn)(stdout, "/>");
-	else{
-	    (*fn)(stdout, ">");
-	    if (prettyprint && hasbody == 0)
-		(*fn)(stdout, "\n");
-	    xc = NULL;
-	    while ((xc = xml_child_each(xn, xc, -1)) != NULL) {
-		if (xml_type(xc) != CX_ATTR)
-		    if (cli_xml2file(xc, level+1, prettyprint, fn) <0)
-			goto done;
-	    }
-	    if (prettyprint && hasbody==0)
-		(*fn)(stdout, "%*s", level*3, "");
-	    (*fn)(stdout, "</");
-	    if (namespace)
-		(*fn)(stdout, "%s:", namespace);
-	    (*fn)(stdout, "%s>", name);
-	}
-	if (prettyprint)
-	    (*fn)(stdout, "\n");
-	break;
-    default:
-	break;
-    }/* switch */
- ok:
-    retval = 0;
- done:
-    if (encstr)
-	free(encstr);
-    return retval;
-}
-
-/*! Translate XML to a "pseudo-code" textual format using a callback - internal function
- * @param[in]  xn     XML object to print
- * @param[in]  fn     Callback to make print function
- * @param[in]  level  print 4 spaces per level in front of each line
- */
-int
-cli_xml2txt(cxobj            *xn,
-	    clicon_output_cb *fn,
-	    int               level)
-{
-    cxobj *xc = NULL;
-    int    children=0;
-    int    retval = -1;
-    int           exist = 0;
-
-    if (xn == NULL || fn == NULL){
-	clicon_err(OE_XML, EINVAL, "xn or fn is NULL");
-	goto done;
-    }
-    if (yang_extension_value(xml_spec(xn), "hide-show", CLIXON_AUTOCLI_NS, &exist, NULL) < 0)
-	goto done;
-    if (exist)
-	goto ok;
-    xc = NULL;     /* count children (elements and bodies, not attributes) */
-    while ((xc = xml_child_each(xn, xc, -1)) != NULL)
-	if (xml_type(xc) == CX_ELMNT || xml_type(xc) == CX_BODY)
-	    children++;
-    if (!children){ /* If no children print line */
-	switch (xml_type(xn)){
-	case CX_BODY:
-	    (*fn)(stdout, "%s;\n", xml_value(xn));
-	    break;
-	case CX_ELMNT:
-	    (*fn)(stdout, "%*s%s;\n", 4*level, "", xml_name(xn));
-	    break;
-	default:
-	    break;
-	}
-	goto ok;
-    }
-    (*fn)(stdout, "%*s", 4*level, "");
-    (*fn)(stdout, "%s ", xml_name(xn));
-    if (!tleaf(xn))
-	(*fn)(stdout, "{\n");
-    xc = NULL;
-    while ((xc = xml_child_each(xn, xc, -1)) != NULL){
-	if (xml_type(xc) == CX_ELMNT || xml_type(xc) == CX_BODY)
-	    if (cli_xml2txt(xc, fn, level+1) < 0)
-		break;
-    }
-    if (!tleaf(xn))
-	(*fn)(stdout, "%*s}\n", 4*level, "");
- ok:
-    retval = 0;
- done:
-    return retval;
-}
-
 /*! Enter a CLI edit mode
  * @param[in]  h    CLICON handle
  * @param[in]  cvv  Vector of variables from CLIgen command-line
@@ -553,7 +364,6 @@ cli_auto_show(clicon_handle h,
     pt_head    *ph;
     char       *xpath = NULL;
     cxobj      *xp;
-    cxobj      *xc = NULL;
     cvec       *nsc = NULL;
     yang_stmt  *yspec;
     cxobj      *xerr;
@@ -561,7 +371,7 @@ cli_auto_show(clicon_handle h,
     cxobj     **vec = NULL;
     size_t      veclen;
     int         i;
-    int         isroot;
+    int         skiproot;
     int         pretty;
     char       *prefix = NULL;
     int         state;
@@ -617,7 +427,7 @@ cli_auto_show(clicon_handle h,
 	api_path = "/";
     if (api_path2xpath(api_path, yspec, &xpath, &nsc, NULL) < 0)
 	goto done;
-    isroot = (xpath == NULL) || strcmp(xpath,"/")==0;
+    skiproot = (xpath != NULL) && (strcmp(xpath,"/") != 0);
     if (state == 0){     /* Get configuration-only from database */
 	if (clicon_rpc_get_config(h, NULL, db, xpath, nsc, &xt) < 0)
 	    goto done;
@@ -642,47 +452,30 @@ cli_auto_show(clicon_handle h,
 	/* Print configuration according to format */
 	switch (format){
 	case FORMAT_XML:
-	    if (isroot)
-		cli_xml2file(xp, 0, pretty, fprintf);
-	    else{
-		while ((xc = xml_child_each(xp, xc, CX_ELMNT)) != NULL)
-		    cli_xml2file(xc, 0, pretty, fprintf);
-	    }
+	    if (clixon_xml2file(stdout, xp, 0, pretty, cligen_output, skiproot, 1) < 0)
+		goto done;
 	    fprintf(stdout, "\n");
 	    break;
 	case FORMAT_JSON:
-	    if (isroot)
-		xml2json_cb(stdout, xp, pretty, cligen_output);
-	    else{
-		while ((xc = xml_child_each(xp, xc, CX_ELMNT)) != NULL)
-		    xml2json_cb(stdout, xc, pretty, cligen_output);
-	    }
+	    if (clixon_json2file(stdout, xp, pretty, cligen_output, skiproot, 1) < 0)
+		goto done;
 	    fprintf(stdout, "\n");
 	    break;
 	case FORMAT_TEXT:
-	    if (isroot)
-		cli_xml2txt(xp, cligen_output, 0); /* tree-formed text */
-	    else
-		while ((xc = xml_child_each(xp, xc, CX_ELMNT)) != NULL)
-		    cli_xml2txt(xc, cligen_output, 0); /* tree-formed text */
+	    if (clixon_txt2file(stdout, xp, 0, cligen_output, skiproot, 1) < 0)
+		goto done;
 	    break;
 	case FORMAT_CLI:
-	    if (isroot)
-		xml2cli(h, stdout, xp, prefix, cligen_output);
-	    else
-		while ((xc = xml_child_each(xp, xc, CX_ELMNT)) != NULL)
-		    xml2cli(h, stdout, xc, prefix, cligen_output);
+	    if (clixon_cli2file(h, stdout, xp, prefix, cligen_output, skiproot) < 0)
+		goto done;
 	    break;
 	case FORMAT_NETCONF:
 	    fprintf(stdout, "<rpc xmlns=\"%s\" %s><edit-config><target><candidate/></target><config>",
 		    NETCONF_BASE_NAMESPACE, NETCONF_MESSAGE_ID_ATTR);
 	    if (pretty)
 		fprintf(stdout, "\n");
-	    if (isroot)
-		cli_xml2file(xp, 2, pretty, fprintf);
-	    else
-		while ((xc = xml_child_each(xp, xc, CX_ELMNT)) != NULL)
-		    cli_xml2file(xc, 2, pretty, fprintf);
+	    if (clixon_xml2file(stdout, xp, 2, pretty, cligen_output, skiproot, 1) < 0)
+		goto done;
 	    fprintf(stdout, "</config></edit-config></rpc>]]>]]>\n");
 	    break;
 	} /* switch */

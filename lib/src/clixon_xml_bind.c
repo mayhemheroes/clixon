@@ -77,6 +77,7 @@
 #include "clixon_netconf_lib.h"
 #include "clixon_xml_sort.h"
 #include "clixon_yang_type.h"
+#include "clixon_xml_map.h"
 #include "clixon_xml_bind.h"
 
 /*
@@ -107,22 +108,28 @@ xml_bind_netconf_message_id_optional(int val)
 
 /*! After yang binding, bodies of containers and lists are stripped from XML bodies
  * May apply to other nodes?
+ * Exception for bodies marked with XML_FLAG_BODYKEY, see text syntax parsing
+ * @see text_mark_bodies
  */
 static int
-strip_whitespace(cxobj *xt)
+strip_body_objects(cxobj *xt)
 {
     yang_stmt    *yt;
     enum rfc_6020 keyword;
-    cxobj        *xc;
+    cxobj        *xb;
     
     if ((yt = xml_spec(xt)) != NULL){
 	keyword = yang_keyword_get(yt);
 	if (keyword == Y_LIST || keyword == Y_CONTAINER){
-	    xc = NULL;
-	    while ((xc = xml_find_type(xt, NULL, "body", CX_BODY)) != NULL)
-		xml_purge(xc);
+	    xb = NULL;
+	    /* Quits if marked object, assume all are same */
+	    while ((xb = xml_find_type(xt, NULL, "body", CX_BODY)) != NULL &&
+		   !xml_flag(xb, XML_FLAG_BODYKEY)){
+		xml_purge(xb);
+	    }
 	}
     }
+
     return 0;
 }
 
@@ -177,31 +184,33 @@ populate_self_parent(cxobj  *xt,
     }
     if (xml2ns(xt, xml_prefix(xt), &ns) < 0)
 	goto done;
-    if ((y = yang_find_datanode(yparent, name)) == NULL){
-	if (_yang_unknown_anydata){
-	    /* Add dummy Y_ANYDATA yang stmt, see ysp_add */
-	    if ((y = yang_anydata_add(yparent, name)) < 0)
+    /* Special case since action is not a datanode */
+    if ((y = yang_find(yparent, Y_ACTION, name)) == NULL)
+	if ((y = yang_find_datanode(yparent, name)) == NULL){
+	    if (_yang_unknown_anydata){
+		/* Add dummy Y_ANYDATA yang stmt, see ysp_add */
+		if ((y = yang_anydata_add(yparent, name)) < 0)
+		    goto done;
+		xml_spec_set(xt, y);
+		retval = 2; /* treat as anydata */
+		clicon_log(LOG_WARNING,
+			   "%s: %d: No YANG spec for %s, anydata used",
+			   __FUNCTION__, __LINE__, name);
 		goto done;
-	    xml_spec_set(xt, y);
-	    retval = 2; /* treat as anydata */
-	    clicon_log(LOG_WARNING,
-		       "%s: %d: No YANG spec for %s, anydata used",
-		       __FUNCTION__, __LINE__, name);
-	    goto done;
+	    }
+	    if ((cb = cbuf_new()) == NULL){
+		clicon_err(OE_UNIX, errno, "cbuf_new");
+		goto done;
+	    }
+	    cprintf(cb, "Failed to find YANG spec of XML node: %s", name);
+	    cprintf(cb, " with parent: %s", xml_name(xp));
+	    if (ns)
+		cprintf(cb, " in namespace: %s", ns);
+	    if (xerr &&
+		netconf_unknown_element_xml(xerr, "application", name, cbuf_get(cb)) < 0)
+		goto done;
+	    goto fail;
 	}
-	if ((cb = cbuf_new()) == NULL){
-	    clicon_err(OE_UNIX, errno, "cbuf_new");
-	    goto done;
-	}
-	cprintf(cb, "Failed to find YANG spec of XML node: %s", name);
-	cprintf(cb, " with parent: %s", xml_name(xp));
-	if (ns)
-	    cprintf(cb, " in namespace: %s", ns);
-	if (xerr &&
-	    netconf_unknown_element_xml(xerr, "application", name, cbuf_get(cb)) < 0)
-	    goto done;
-	goto fail;
-    }
     nsy = yang_find_mynamespace(y);
     if (ns == NULL || nsy == NULL){
 	if (xerr &&
@@ -367,7 +376,7 @@ xml_bind_yang(cxobj     *xt,
     cxobj *xc;         /* xml child */
     int    ret;
 
-    strip_whitespace(xt);
+    strip_body_objects(xt);
     xc = NULL;     /* Apply on children */
     while ((xc = xml_child_each(xt, xc, CX_ELMNT)) != NULL) {
 	if ((ret = xml_bind_yang0(xc, yb, yspec, xerr)) < 0)
@@ -414,7 +423,7 @@ xml_bind_yang0_opt(cxobj     *xt,
 	goto fail;
     else if (ret == 2)     /* ret=2 for anyxml from parent^ */
     	goto ok;
-    strip_whitespace(xt);
+    strip_body_objects(xt);
     xc = NULL;     /* Apply on children */
     while ((xc = xml_child_each(xt, xc, CX_ELMNT)) != NULL) {
 	/* It is xml2ns in populate_self_parent that needs improvement */
@@ -493,7 +502,7 @@ xml_bind_yang0(cxobj     *xt,
 	goto fail;
     else if (ret == 2)     /* ret=2 for anyxml from parent^ */
     	goto ok;
-    strip_whitespace(xt);
+    strip_body_objects(xt);
     xc = NULL;     /* Apply on children */
     while ((xc = xml_child_each(xt, xc, CX_ELMNT)) != NULL) {
 	if ((ret = xml_bind_yang0_opt(xc, YB_PARENT, NULL, xerr)) < 0)
@@ -502,6 +511,92 @@ xml_bind_yang0(cxobj     *xt,
 	    goto fail;
     }
  ok:
+    retval = 1;
+ done:
+    return retval;
+ fail:
+    retval = 0;
+    goto done;
+}
+
+/*! RPC-specific
+ */
+static int
+xml_bind_yang_rpc_rpc(cxobj     *x,
+		      yang_stmt *yrpc,
+		      char      *rpcname,
+		      cxobj    **xerr)
+{
+    int        retval = -1;
+    cbuf      *cb = NULL;
+    char      *name;
+    cxobj     *xc;
+    yang_stmt *yi = NULL; /* input */
+    int        ret;
+
+    xml_spec_set(x, yrpc); /* required for validate */
+    if ((yi = yang_find(yrpc, Y_INPUT, NULL)) == NULL){
+	/* If no yang input spec but RPC has elements, return unknown element */
+	if (xml_child_nr_type(x, CX_ELMNT) != 0){
+	    xc = xml_child_i_type(x, 0, CX_ELMNT); /* Pick first */
+	    name = xml_name(xc);
+	    if ((cb = cbuf_new()) == NULL){
+		clicon_err(OE_UNIX, errno, "cbuf_new");
+		goto done;
+	    }
+	    cprintf(cb, "Unrecognized parameter: %s in rpc: %s", name, rpcname);
+	    if (xerr &&
+		netconf_unknown_element_xml(xerr, "application", name, cbuf_get(cb)) < 0)
+		goto done;
+	    goto fail;
+	}
+    }
+    else{
+	/* xml_bind_yang need to have parent with yang spec for
+	 * recursive population to work. Therefore, assign input yang
+	 * to rpc level although not 100% intuitive */
+	xml_spec_set(x, yi); 
+	if ((ret = xml_bind_yang(x, YB_PARENT, NULL, xerr)) < 0)
+	    goto done;
+	if (ret == 0)
+	    goto fail;
+    }
+    retval = 1;
+ done:
+    if (cb)
+	cbuf_free(cb);
+    return retval;
+ fail:
+    retval = 0;
+    goto done;
+}
+
+/*! Action-specific
+ *
+ * Find the innermost container or list containing an XML element that carries the name of the
+ * defined action.
+ * Only one action can be invoked in one rpc
+ * XXX if not more action, consider folding into calling function
+ */
+static int
+xml_bind_yang_rpc_action(cxobj     *xn,
+			 yang_stmt *yspec,
+			 cxobj    **xerr)
+{
+    int        retval = -1;
+    int        ret;
+    cxobj     *xi;
+    yang_stmt *yi;;
+
+    if ((ret = xml_bind_yang(xn, YB_MODULE, yspec, xerr)) < 0)
+	goto done;
+    if (ret == 0)
+	goto fail;
+    /* Special case: bind "action" node to module for validate code to work */
+    if ((xi = xml_child_i_type(xn, 0, CX_ELMNT)) != NULL &&
+	(yi = xml_spec(xi))){
+	xml_spec_set(xn, ys_module(yi));
+    }
     retval = 1;
  done:
     return retval;
@@ -535,13 +630,11 @@ xml_bind_yang_rpc(cxobj        *xrpc,
     int        retval = -1;
     yang_stmt *yrpc = NULL;    /* yang node */
     yang_stmt *ymod=NULL; /* yang module */
-    yang_stmt *yi = NULL; /* input */
     cxobj     *x;
     int        ret;
     char      *opname;  /* top-level netconf operation */
     char      *rpcname; /* RPC name */
     char      *name;
-    cbuf      *cb = NULL;
     cxobj     *xc;
     
     opname = xml_name(xrpc);
@@ -601,6 +694,15 @@ xml_bind_yang_rpc(cxobj        *xrpc,
     x = NULL;
     while ((x = xml_child_each(xrpc, x, CX_ELMNT)) != NULL) {
 	rpcname = xml_name(x);
+	if ((ret = xml_rpc_isaction(x)) < 0)
+	    goto done;
+	if (ret == 1){
+	    if ((ret = xml_bind_yang_rpc_action(x, yspec, xerr)) < 0)
+		goto done;
+	    if (ret == 0)
+		goto fail;
+	    goto ok;
+	} /* if not action fall through */
 	if (ys_module_by_xml(yspec, x, &ymod) < 0)
 	    goto done;
 	if (ymod == NULL){
@@ -615,39 +717,14 @@ xml_bind_yang_rpc(cxobj        *xrpc,
 		goto done;
 	    goto fail;
 	}
-	xml_spec_set(x, yrpc); /* required for validate */
-	if ((yi = yang_find(yrpc, Y_INPUT, NULL)) == NULL){
-	    /* If no yang input spec but RPC has elements, return unknown element */
-	    if (xml_child_nr_type(x, CX_ELMNT) != 0){
-		xc = xml_child_i_type(x, 0, CX_ELMNT); /* Pick first */
-		name = xml_name(xc);
-		if ((cb = cbuf_new()) == NULL){
-		    clicon_err(OE_UNIX, errno, "cbuf_new");
-		    goto done;
-		}
-		cprintf(cb, "Unrecognized parameter: %s in rpc: %s", name, rpcname);
-		if (xerr &&
-		    netconf_unknown_element_xml(xerr, "application", name, cbuf_get(cb)) < 0)
-		    goto done;
-		goto fail;
-	    }
-	}
-	else{
-	    /* xml_bind_yang need to have parent with yang spec for
-	     * recursive population to work. Therefore, assign input yang
-	     * to rpc level although not 100% intuitive */
-	    xml_spec_set(x, yi); 
-	    if ((ret = xml_bind_yang(x, YB_PARENT, NULL, xerr)) < 0)
-		goto done;
-	    if (ret == 0)
-		goto fail;
-	}
+	if ((ret = xml_bind_yang_rpc_rpc(x, yrpc, rpcname, xerr)) < 0)
+	    goto done;
+	if (ret == 0)
+	    goto fail;
     }
  ok:
     retval = 1;
  done:
-    if (cb)
-	cbuf_free(cb);
     return retval;
  fail:
     retval = 0;

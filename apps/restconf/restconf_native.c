@@ -261,6 +261,7 @@ ssl_x509_name_oneline(SSL   *ssl,
  * @param[out] term  Terminate session
  * @retval    -1     Error
  * @retval     0     OK
+ * @see restconf_accept_client where connection can be exited at an earlier stage
  */
 int
 restconf_connection_sanity(clicon_handle         h,
@@ -273,6 +274,7 @@ restconf_connection_sanity(clicon_handle         h,
     cbuf          *cberr = NULL;
     restconf_media media_out = YANG_DATA_JSON;
     char          *media_str = NULL;
+    char          *oneline = NULL;
     
     /* 1) Check if http/2 non-tls is disabled */
     if (rc->rc_ssl == NULL &&
@@ -294,11 +296,20 @@ restconf_connection_sanity(clicon_handle         h,
     /* 2) Check if ssl client cert is valid */
     else if (rc->rc_ssl != NULL &&
 	     (code = SSL_get_verify_result(rc->rc_ssl)) != 0){
+	/* Syslog cert failure */
+	if (ssl_x509_name_oneline(rc->rc_ssl, &oneline) < 0)
+	    goto done;
+	if (oneline)
+	    clicon_log(LOG_NOTICE, "Cert error: %s: %s", oneline, X509_verify_cert_error_string(code));
+	else
+	    clicon_log(LOG_NOTICE, "Cert error: %s", X509_verify_cert_error_string(code));
+	/* Send return error message */
 	if ((cberr = cbuf_new()) == NULL){
 	    clicon_err(OE_UNIX, errno, "cbuf_new");
 	    goto done;
 	}
-	cprintf(cberr, "HTTP cert verification failed, unknown ca: (code:%ld)", code); 
+	cprintf(cberr, "HTTP cert verification failed: %s",
+		X509_verify_cert_error_string(code));
 	if (netconf_invalid_value_xml(&xerr, "protocol", cbuf_get(cberr)) < 0)
 	    goto done;
 	if ((media_str = restconf_param_get(h, "HTTP_ACCEPT")) == NULL){
@@ -314,6 +325,8 @@ restconf_connection_sanity(clicon_handle         h,
     }
     retval = 0;
  done:
+    if (oneline)
+	free(oneline);
     if (cberr)
 	cbuf_free(cberr);
     if (xerr)
@@ -519,14 +532,13 @@ read_ssl(restconf_conn *rc,
 	    usleep(1000);
 	    *again = 1;
 	    break;
+	case SSL_ERROR_ZERO_RETURN:
+	    *np = 0; /* should already be zero */
+	    break;
 	default:
-#if 1 /* Make socket read error handling more resilient: log and continue instead of exit */
-	    clicon_log(LOG_WARNING, "%s SSL_read(): %s", __FUNCTION__, strerror(errno));
+	    clicon_log(LOG_WARNING, "%s SSL_read(): %s sslerr:%d", __FUNCTION__, strerror(errno), sslerr);
 	    *np = 0;	    
-#else
-	    clicon_err(OE_XML, errno, "SSL_read %d", sslerr);
-	    goto done;
-#endif
+	    break;
 	} /* switch */
     }
     retval = 0;
@@ -690,12 +702,10 @@ restconf_http1_process(restconf_conn        *rc,
      */
     if ((ret = http1_check_content_length(h, sd, &status)) < 0)
 	goto done;
-#ifndef RESTCONF_HTTP1_UNITTEST /* Ignore content-length */
     if (status == 1){
 	(*readmore)++;
 	goto ok;
     }
-#endif
     /* nginx compatible, set HTTPS parameter if SSL */
     if (rc->rc_ssl)
 	if (restconf_param_set(h, "HTTPS", "https") < 0)
@@ -703,15 +713,9 @@ restconf_http1_process(restconf_conn        *rc,
     /* main restconf processing */
     if (restconf_http1_path_root(h, rc) < 0)
 	goto done;
-#ifdef RESTCONF_HTTP1_UNITTEST
-    if (native_buf_write(cbuf_get(sd->sd_outp_buf), cbuf_len(sd->sd_outp_buf),
-			 1, rc->rc_ssl) < 0)
-	goto done;
-#else
     if (native_buf_write(cbuf_get(sd->sd_outp_buf), cbuf_len(sd->sd_outp_buf),
 			 rc->rc_s, rc->rc_ssl) < 0)
 	goto done;
-#endif
     cvec_reset(sd->sd_outp_hdrs); /* Can be done in native_send_reply */
     cbuf_reset(sd->sd_outp_buf);
     cbuf_reset(sd->sd_inbuf);
@@ -939,16 +943,5 @@ restconf_connection(int   s,
     retval = 0;
  done:
     clicon_debug(1, "%s retval %d", __FUNCTION__, retval);
-#ifdef RESTCONF_HTTP1_UNITTEST /* unit test */
-    if (rc){
-	if (close(rc->rc_s) < 0){
-	    clicon_err(OE_UNIX, errno, "close");
-	    goto done;
-	}
-	clixon_event_unreg_fd(rc->rc_s, restconf_connection);
-	restconf_conn_free(rc);
-    }
-    exit(0);
-#endif
     return retval;
 } /* restconf_connection */

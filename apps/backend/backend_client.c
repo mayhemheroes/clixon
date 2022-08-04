@@ -274,7 +274,15 @@ clixon_stats_module_get(clicon_handle h,
  * @param[in]  regarg  User argument given at rpc_callback_register() 
  * @retval     0       OK
  * @retval    -1       Error
- */
+ * @note  According to RFC 7950 8.3: constraints MUST be enforced:
+ * o  during parsing of RPC payloads
+ * o  during processing of the <edit-config> operation
+ * But Clixon is flexible in allowing invalid XML payload here, only some specialized
+ * validations are made.
+ * However, what really should be done is to apply the change to the datastore and then
+ * validate, if error, discard to previous state. 
+ * But this could discard other previous changes to candidate.
+  */
 static int
 from_client_edit_config(clicon_handle h,
 			cxobj        *xn,
@@ -366,7 +374,7 @@ from_client_edit_config(clicon_handle h,
     if ((ret = xml_bind_yang(xc, YB_MODULE, yspec, &xret)) < 0)
 	goto done;
     if (ret == 0){
-	if (clicon_xml2cbuf(cbret, xret, 0, 0, -1) < 0)
+	if (clixon_xml2cbuf(cbret, xret, 0, 0, -1, 0) < 0)
 	    goto done;
 	goto ok;
     }
@@ -374,7 +382,7 @@ from_client_edit_config(clicon_handle h,
     if ((ret = xml_non_config_data(xc, &xret)) < 0)
 	goto done;
     if (ret == 0){
-	if (clicon_xml2cbuf(cbret, xret, 0, 0, -1) < 0)
+	if (clixon_xml2cbuf(cbret, xret, 0, 0, -1, 0) < 0)
 	    goto done;
 	goto ok;
     }
@@ -383,14 +391,19 @@ from_client_edit_config(clicon_handle h,
 	    goto done;
 	goto ok;
     }
+    /* Limited validation of incoming payload
+     */
+    if ((ret = xml_yang_check_list_unique_minmax(xc, &xret)) < 0)
+	goto done;
     /* xmldb_put (difflist handling) requires list keys */
-    if ((ret = xml_yang_validate_list_key_only(xc, &xret)) < 0)
+    if (ret==1 && (ret = xml_yang_validate_list_key_only(xc, &xret)) < 0)
 	goto done;
     if (ret == 0){
-	if (clicon_xml2cbuf(cbret, xret, 0, 0, -1) < 0)
+	if (clixon_xml2cbuf(cbret, xret, 0, 0, -1, 0) < 0)
 	    goto done;
 	goto ok;
     }
+
     /* Cant do this earlier since we dont have a yang spec to
      * the upper part of the tree, until we get the "config" tree.
      */
@@ -854,7 +867,6 @@ from_client_kill_session(clicon_handle h,
     return retval;
 }
 
-
 /*! Create a notification subscription
  * @param[in]  h       Clicon handle 
  * @param[in]  xe      Request: <rpc><xn></rpc> 
@@ -1190,7 +1202,6 @@ from_client_hello(clicon_handle       h,
     return retval;
 }
 
-
 /*! An internal clicon message has arrived from a client. Receive and dispatch.
  * @param[in]   h    Clicon handle
  * @param[in]   s    Socket where message arrived. read from this.
@@ -1234,14 +1245,16 @@ from_client_msg(clicon_handle        h,
 	clicon_err(OE_XML, errno, "cbuf_new");
 	goto done;
     }
-    /* Decode msg from client -> xml top (ct) and session id */
+    /* Decode msg from client -> xml top (ct) and session id 
+     * Bind is a part of the decode function
+     */
     if ((ret = clicon_msg_decode(msg, yspec, &id, &xt, &xret)) < 0){
 	if (netconf_malformed_message(cbret, "XML parse error") < 0)
 	    goto done;
 	goto reply;
     }
     if (ret == 0){
-	if (clicon_xml2cbuf(cbret, xret, 0, 0, -1) < 0)
+	if (clixon_xml2cbuf(cbret, xret, 0, 0, -1, 0) < 0)
 	    goto done;
 	goto reply;
     }
@@ -1303,7 +1316,7 @@ from_client_msg(clicon_handle        h,
     if ((ret = xml_yang_validate_rpc(h, x, &xret)) < 0)
 	goto done;
     if (ret == 0){
-	if (clicon_xml2cbuf(cbret, xret, 0, 0, -1) < 0)
+	if (clixon_xml2cbuf(cbret, xret, 0, 0, -1, 0) < 0)
 	    goto done;
 	goto reply;
     }
@@ -1493,6 +1506,9 @@ backend_rpc_init(clicon_handle h)
 	goto done;
     if (rpc_callback_register(h, from_client_kill_session, NULL,
 		      NETCONF_BASE_NAMESPACE, "kill-session") < 0)
+	goto done;
+    if (rpc_callback_register(h, action_callback_call, NULL,
+		      YANG_XML_NAMESPACE, "action") < 0)
 	goto done;
     /* In backend_commit.? */
     if (rpc_callback_register(h, from_client_commit, NULL,

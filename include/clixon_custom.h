@@ -152,14 +152,15 @@
  */
 #define USE_CONFIG_FLAG_CACHE
 
-/*! Restconf native unit test for fuzzing of http/1 parser
- * See test/fuzz/http1
- */
-#undef RESTCONF_HTTP1_UNITTEST
-
 /*! If backend is restarted, cli and netconf client will retry (once) and reconnect
  * Note, if client has locked or had edits in progress, these will be lost
  * A warning will be printed
  * If not set, client will exit
  */
 #define PROTO_RESTART_RECONNECT
+
+/*! Disable top-level prefix for text syntax printing and parsing introduced in 5.8
+ * Note this is for showing/saving/printing, it is NOT for parsing/loading.
+ * This means that text output can not be parsed and loaded.
+ */
+#undef TEXT_SYNTAX_NOPREFIX

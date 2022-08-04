@@ -35,14 +35,15 @@
 
   * The example have the following optional arguments that you can pass as 
   * argc/argv after -- in clixon_backend:
+  *  -a <..> Register callback for this yang action
   *  -r  enable the reset function 
   *  -s  enable the state function
   *  -S <file>  read state data from file, otherwise construct it programmatically (requires -s)
   *  -i  read state file on init not by request for optimization (requires -sS <file>)
   *  -u  enable upgrade function - auto-upgrade testing
   *  -U  general-purpose upgrade
-  *  -t  enable transaction logging (cal syslog for every transaction)
-  *  -v <xpath> Failing validate and commit if <xpath> is present (synthetic error)
+  *  -t  enable transaction logging (call syslog for every transaction)
+  *  -V <xpath> Failing validate and commit if <xpath> is present (synthetic error)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +67,14 @@
 #include <clixon/clixon_backend.h> 
 
 /* Command line options to be passed to getopt(3) */
-#define BACKEND_EXAMPLE_OPTS "rsS:x:iuUt:v:"
+#define BACKEND_EXAMPLE_OPTS "a:rsS:x:iuUtV:"
+
+/*! Yang action
+ * Start backend with -- -a <instance-id>
+ * where instance-id points to an action node in some YANG
+ * Hard-coded to action "reset" from RFC7950 7.15
+ */
+static char *_action_instanceid = NULL;
 
 /*! Variable to control if reset code is run.
  * The reset code inserts "extra XML" which assumes ietf-interfaces is
@@ -124,11 +132,17 @@ static int _general_upgrade = 0;
  */
 static int _transaction_log = 0;
 
-/*! Variable to control transaction logging (for debug)
- * If set, call syslog for every transaction callback 
- * Start backend with -- -v <xpath>
+/*! Variable to trigger validation/commit errors (synthetic errors) for tests
+ * XPath to trigger validation error, ie if the XPath matches, then validate fails
+ * This is to make tests where a transaction fails midway and aborts/reverts the transaction.
+ * Start backend with -- -V <xpath>
+ * Note that the second backend plugin has a corresponding -v <xpath> to do the same thing
  */
 static char *_validate_fail_xpath = NULL;
+
+/*! Sub state variable to fail on validate/commit (not configured)
+ * Obscure, but a way to first trigger a validation error, next time to trigger a commit error
+ */
 static int   _validate_fail_toggle = 0; /* fail at validate and commit */
 
 /* forward */
@@ -184,7 +198,6 @@ main_commit(clicon_handle    h,
 
     if (_transaction_log)
 	transaction_log(h, td, LOG_NOTICE, __FUNCTION__);
-
     if (_validate_fail_xpath){
 	if (_validate_fail_toggle==1 &&
 	    xpath_first(transaction_target(td), NULL, "%s", _validate_fail_xpath)){
@@ -326,12 +339,14 @@ example_rpc(clicon_handle h,            /* Clicon handle */
     cprintf(cbret, ">");
     if (!xml_child_nr_type(xe, CX_ELMNT))
 	cprintf(cbret, "<ok/>");
-    else while ((x = xml_child_each(xe, x, CX_ELMNT)) != NULL) {
+    else {
+	while ((x = xml_child_each(xe, x, CX_ELMNT)) != NULL) {
 	    if (xmlns_set(x, NULL, namespace) < 0)
 		goto done;
-	    if (clicon_xml2cbuf(cbret, x, 0, 0, -1) < 0)
-		goto done;
 	}
+	if (clixon_xml2cbuf(cbret, xe, 0, 0, -1, 1) < 0)
+	    goto done;
+    }
     cprintf(cbret, "</rpc-reply>");
     retval = 0;
  done:
@@ -350,6 +365,28 @@ example_copy_extra(clicon_handle h,            /* Clicon handle */
     int    retval = -1;
 
     //    fprintf(stderr, "%s\n", __FUNCTION__);
+    retval = 0;
+    // done:
+    return retval;
+}
+
+/*! Action callback, example from RFC7950 7.15
+ * Note callback is hardcoded C, while registration is controlled by -- -a option
+ */
+static int 
+example_action_reset(clicon_handle h,            /* Clicon handle */
+		     cxobj        *xe,           /* Request: <rpc><xn></rpc> */
+		     cbuf         *cbret,        /* Reply eg <rpc-reply>... */
+		     void         *arg,          /* client_entry */
+		     void         *regarg)       /* Argument given at register */
+{
+    int    retval = -1;
+    char *reset_at;
+
+    if ((reset_at = xml_find_body(xe, "reset-at")) != NULL)
+	/* Just copy input to output */
+	cprintf(cbret, "<rpc-reply xmlns=\"%s\"><reset-finished-at xmlns=\"urn:example:server-farm\">%s</reset-finished-at></rpc-reply>",
+		NETCONF_BASE_NAMESPACE, reset_at);
     retval = 0;
     // done:
     return retval;
@@ -1153,7 +1190,29 @@ example_reset(clicon_handle h,
 int
 example_start(clicon_handle h)
 {
-    return 0;
+    int        retval = -1;
+    yang_stmt *yspec;
+    yang_stmt *ya = NULL;
+
+    /* Register action callback, example from RFC7950 7.15
+     * Can not be made in _init since YANG is not loaded
+     * Note that callback is hardcoded here since it is C, but YANG and name of action
+     * is not. It is enough to point via an schema-node id to the correct action,
+     * such as "/sfarm:server/sfarm:reset"
+     */
+    if (_action_instanceid){
+	if ((yspec = clicon_dbspec_yang(h)) == NULL){
+	    clicon_err(OE_FATAL, 0, "No DB_SPEC");
+	    goto done;
+	}
+	if (yang_abs_schema_nodeid(yspec, _action_instanceid, &ya) == 0){
+	    if (ya && action_callback_register(h, ya, example_action_reset, NULL) < 0)
+		goto done;
+	}
+    }
+    retval = 0;
+ done:
+    return retval;
 }
 
 /*! Plugin daemon.
@@ -1252,6 +1311,9 @@ clixon_plugin_init(clicon_handle h)
     optind = 1;
     while ((c = getopt(argc, argv, BACKEND_EXAMPLE_OPTS)) != -1)
 	switch (c) {
+	case 'a':
+	    _action_instanceid = optarg;
+	    break;
 	case 'r':
 	    _reset = 1;
 	    break;
@@ -1276,7 +1338,7 @@ clixon_plugin_init(clicon_handle h)
 	case 't': /* transaction log */
 	    _transaction_log = 1;
 	    break;
-	case 'v': /* validate fail */
+	case 'V': /* validate fail */
 	    _validate_fail_xpath = optarg;
 	    break;
 	}
@@ -1344,6 +1406,7 @@ clixon_plugin_init(clicon_handle h)
 			      "copy-config"
 			      ) < 0)
 	goto done;
+
     /* Upgrade callback: if you start the backend with -- -u you will get the
      * test interface example. Otherwise the auto-upgrade feature is enabled.
      */

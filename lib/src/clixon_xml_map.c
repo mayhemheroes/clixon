@@ -107,110 +107,6 @@ isxmlns(cxobj *x)
     return 0;
 }
 
-/*! x is element and has eactly one child which in turn has none 
- * @see child_type in clixon_json.c
- */
-static int
-tleaf(cxobj *x)
-{
-    cxobj *xc;
-
-    if (xml_type(x) != CX_ELMNT)
-	return 0;
-    if (xml_child_nr_notype(x, CX_ATTR) != 1)
-	return 0;
-    /* From here exactly one noattr child, get it */
-    xc = NULL;
-    while ((xc = xml_child_each(x, xc, -1)) != NULL)
-	if (xml_type(xc) != CX_ATTR)
-	    break;
-    if (xc == NULL)
-	return -1; /* n/a */
-    return (xml_child_nr_notype(xc, CX_ATTR) == 0);
-}
-
-/*! Translate XML to a "pseudo-code" textual format using a callback - internal function
- * @param[in]  f      File to print to
- * @param[in]  x      XML object to print
- * @param[in]  fn     Callback to make print function
- * @param[in]  level  print 4 spaces per level in front of each line
- */
-static int 
-xml2txt_recurse(FILE             *f, 
-		cxobj            *x, 
-		clicon_output_cb *fn,
-		int               level)
-{
-    cxobj *xc = NULL;
-    int    children=0;
-    int    retval = -1;
-
-    if (f == NULL || x == NULL || fn == NULL){
-	clicon_err(OE_XML, EINVAL, "f, x or fn is NULL");
-	goto done;
-    }
-    xc = NULL;     /* count children (elements and bodies, not attributes) */
-    while ((xc = xml_child_each(x, xc, -1)) != NULL)
-	if (xml_type(xc) == CX_ELMNT || xml_type(xc) == CX_BODY)
-	    children++;
-    if (!children){ /* If no children print line */
-	switch (xml_type(x)){
-	case CX_BODY:
-	    (*fn)(f, "%s;\n", xml_value(x));
-	    break;
-	case CX_ELMNT:
-	    (*fn)(f, "%*s%s;\n", 4*level, "", xml_name(x));
-	    break;
-	default:
-	    break;
-	}
-	goto ok;
-    }
-    (*fn)(f, "%*s", 4*level, "");
-    (*fn)(f, "%s ", xml_name(x));
-    if (!tleaf(x))
-	(*fn)(f, "{\n");
-    xc = NULL;
-    while ((xc = xml_child_each(x, xc, -1)) != NULL){
-	if (xml_type(xc) == CX_ELMNT || xml_type(xc) == CX_BODY)
-	    if (xml2txt_recurse(f, xc, fn, level+1) < 0)
-		break;
-    }
-    if (!tleaf(x))
-	(*fn)(f, "%*s}\n", 4*level, "");
- ok:
-    retval = 0;
- done:
-    return retval;
-}
-
-/*! Translate XML to a "pseudo-code" textual format using a callback
- * @param[in]  f      File to print to
- * @param[in]  x      XML object to print
- * @param[in]  fn     Callback to make print function
- */
-int 
-xml2txt_cb(FILE             *f, 
-	   cxobj            *x, 
-	   clicon_output_cb *fn)
-{
-    return xml2txt_recurse(f, x, fn, 0);
-}
-
-/*! Translate XML to a "pseudo-code" textual format using stdio file
- * @param[in]  f      File to print to
- * @param[in]  x      XML object to print
- * @param[in]  level  print 4 spaces per level in front of each line
- * @see xml2txt_cb
- */
-int 
-xml2txt(FILE  *f, 
-	cxobj *x, 
-	int    level)
-{
-    return xml2txt_recurse(f, x, fprintf, level);
-}
-
 /*! Translate a single xml node to a cligen variable vector. Note not recursive 
  * @param[in]  xt   XML tree containing one top node
  * @param[in]  ys   Yang spec containing type specification of top-node of xt
@@ -1463,23 +1359,24 @@ xmlns_assign(cxobj *x)
 }
 
 /*! Given a src element node x0 and a target node x1, assign (optional) prefix and namespace
+ * @param[in]  x1       XML tree
+ * @param[in]  x1p      XML tree parent
+ * @retval     0        OK
+ * @retval     -1       OK
  * @see assign_namespace_element  this is a subroutine
  */
 static int
-assign_namespace(cxobj *x0, /* source */
-		 cxobj *x1, /* target */
-		 cxobj *x1p,
-		 int    isroot,
-		 char  *ns,
-		 char  *prefix0)
+assign_namespace(cxobj     *x1, /* target */
+		 cxobj     *x1p,
+		 int        isroot,
+		 char      *ns,
+		 char      *prefix0)
 {
-    int        retval = -1;
-    char      *prefix1 = NULL;
-    char      *pexist = NULL;
-    cvec      *nsc0 = NULL;
-    cvec      *nsc = NULL;
-    yang_stmt *y;
-    int        ret;
+    int    retval = -1;
+    char  *prefix1 = NULL;
+    char  *pexist = NULL;
+    cvec  *nsc0 = NULL;
+    cvec  *nsc = NULL;
     
     /* 2a. Detect if namespace is declared in x1 target parent */
     if (xml2prefix(x1p, ns, &pexist) == 1){
@@ -1520,8 +1417,7 @@ assign_namespace(cxobj *x0, /* source */
 	    }
 	    goto ok; /* skip */
 	}
-	else { /* namespace does not exist in target x1, use source prefix 
-		* use the prefix defined in the module
+	else { /* namespace does not exist in target x1, 
 		*/
 	    if (isroot){
 		if (prefix0 && (prefix1 = strdup(prefix0)) == NULL){
@@ -1530,20 +1426,11 @@ assign_namespace(cxobj *x0, /* source */
 		}
 	    }
 	    else{
-		char *ptmp;
-		if ((y = xml_spec(x0)) == NULL){
-		    clicon_err(OE_YANG, ENOENT, "XML %s does not have yang spec",
-			       xml_name(x0));
-		    goto done;
+		if (prefix0 == NULL){ /* Use default namespace, may break use of previous default 
+				       * somewhere in x1
+				       */
+		    prefix1 = NULL;
 		}
-		/* Find local (imported) prefix for that module namespace */
-		if ((ret = yang_find_prefix_by_namespace(y, ns, &ptmp)) < 0)
-		    goto done;
-		if (ret == 1 && (prefix1 = strdup(ptmp)) == NULL){
-		    clicon_err(OE_UNIX, errno, "strdup");
-		    goto done;
-		}   
-
 	    }
 	}
 	if (add_namespace(x1, x1, prefix1, ns) < 0)
@@ -1569,7 +1456,8 @@ assign_namespace(cxobj *x0, /* source */
  * 1. Find N=namespace(x0)
  * 2. Detect if N is declared in x1 parent
  * 3. If yes, assign prefix to x1
- * 4. If no, create new prefix/namespace binding and assign that to x1p (x1 if x1p is root)
+ * 4. If no, if default namespace use that, otherwise create new prefix/namespace binding and assign 
+ *    that to x1p
  * 5. Add prefix to x1, if any
  * 6. Ensure x1 cache is updated
  * @note switch use of x0 and x1 compared to datastore text_modify
@@ -1597,7 +1485,7 @@ assign_namespace_element(cxobj *x0, /* source */
 		   prefix0?prefix0:"NULL");
 	goto done;
     }
-    if (assign_namespace(x0, x1, x1p, isroot, namespace, prefix0) < 0)
+    if (assign_namespace(x1, x1p, isroot, namespace, prefix0) < 0)
 	goto done;
     /* 6. Ensure x1 cache is updated (I think it is done w xmlns_set above) */
     retval = 0;
@@ -1922,6 +1810,74 @@ xml_merge(cxobj     *x0,
     goto done;
 }
 
+/*! Given a YANG (enum) type node and a value, return the string containing corresponding int str
+ *
+ * @param[in]  ytype   YANG type noden
+ * @param[in]  valstr  Integer string value
+ * @param[out] enumstr Value of enum, dont free
+ */
+int
+yang_valstr2enum(yang_stmt *ytype,
+		 char      *valstr,
+		 char     **enumstr)
+{
+    int        retval = -1;
+    yang_stmt *yenum = NULL;
+    yang_stmt *yval; 
+
+    if (enumstr == NULL){
+	clicon_err(OE_UNIX, EINVAL, "str is NULL");
+	goto done;
+    }
+    while ((yenum = yn_each(ytype, yenum)) != NULL) {
+	if ((yval = yang_find(yenum, Y_VALUE, NULL)) == NULL)
+	    goto done;
+	if (strcmp(yang_argument_get(yval), valstr) == 0)
+	    break;
+    }
+    if (yenum)
+	*enumstr = yang_argument_get(yenum);
+    retval = 0;
+ done:
+    return retval;
+}
+
+/*! Given a YANG (enum) type node and a value, return the string containing corresponding int str
+ *
+ * @param[in]  ytype   YANG type noden
+ * @param[in]  enumstr Value of enum
+ * @param[out] valstr  Corresponding string containing an int (direct pointer, dont free)
+ * @retval     1       OK, result in valstr
+ * @retval     0       Invalid, not found
+ * @retval     -1      Error
+ */
+int
+yang_enum2valstr(yang_stmt *ytype,
+		 char      *enumstr,
+		 char     **valstr)
+{
+    int        retval = -1;
+    yang_stmt *yenum; 
+    yang_stmt *yval; 
+
+    if (valstr == NULL){
+	clicon_err(OE_UNIX, EINVAL, "valstr is NULL");
+	goto done;
+    }
+    if ((yenum = yang_find(ytype, Y_ENUM, enumstr)) == NULL)
+	goto fail;
+    /* Should assign value if yval not found */
+    if ((yval = yang_find(yenum, Y_VALUE, NULL)) == NULL)
+	goto done;
+    *valstr = yang_argument_get(yval);
+    retval = 1;
+ done:
+    return retval;
+ fail:
+    retval = 0;
+    goto done;
+}
+
 /*! Get integer value from xml node from yang enumeration 
  * @param[in]  node XML node in a tree
  * @param[out] val  Integer value returned
@@ -1944,9 +1900,8 @@ yang_enum_int_value(cxobj   *node,
     yang_stmt *ys;
     yang_stmt *ytype;
     yang_stmt *yrestype;  /* resolved type */
-    yang_stmt *yenum; 
-    yang_stmt *yval; 
     char      *reason = NULL;
+    char      *intstr = NULL;
 
     if (node == NULL)
 	goto done;
@@ -1965,19 +1920,15 @@ yang_enum_int_value(cxobj   *node,
     }
     if (yrestype==NULL || strcmp(yang_argument_get(yrestype), "enumeration"))
 	goto done;
-    if ((yenum = yang_find(yrestype, Y_ENUM, xml_body(node))) == NULL)
-	goto done;
-    /* Should assign value if yval not found */
-    if ((yval = yang_find(yenum, Y_VALUE, NULL)) == NULL)
+    if (yang_enum2valstr(yrestype, xml_body(node), &intstr) < 0)
 	goto done;
     /* reason is string containing why int could not be parsed */
-    if (parse_int32(yang_argument_get(yval), val, &reason) < 0)
+    if (parse_int32(intstr, val, &reason) < 0)
 	goto done;
     retval = 0;
 done:
     return retval;
 }
-
 
 /*! Given XML tree x0 with marked nodes, copy marked nodes to new tree x1
  * Two marks are used: XML_FLAG_MARK and XML_FLAG_CHANGE
@@ -2137,3 +2088,66 @@ yang_check_when_xpath(cxobj        *xn,
     return retval;
 }
 
+/*! Is XML node (ie under <rpc>) an action, ie name action and belong to YANG_XML_NAMESPACE?
+ * @param[in]   xn   XML node
+ * @retval      1    Yes, an action
+ * @retval      0    No, not an action
+ * @retval     -1    Error
+ */
+int
+xml_rpc_isaction(cxobj *xn)
+{
+    int   retval = -1;
+    char *ns = NULL;
+
+    if (strcmp(xml_name(xn), "action") != 0)
+	goto fail;
+    if (xml2ns(xn, xml_prefix(xn), &ns) < 0)
+	goto done;
+    if (strcmp(YANG_XML_NAMESPACE, ns) != 0)
+	goto fail;
+    retval = 1; // is action
+ done:
+    return retval;
+ fail:
+    retval = 0;
+    goto done;
+}
+
+/*! Find innermost node under <action> carrying the name of the defined action
+ *  Find innermost container or list contains an XML element
+ *  that carries the name of the defined action. 
+ * @param[in]   xn   XML node
+ * @param[in]   top  If set, dont look for action node since top-level
+ * @param[out]  xap  Pointer to xml action node
+ * @retval      0    OK
+ * @retval     -1    Error
+ * XXX: does not look at list key
+ */
+int
+xml_find_action(cxobj  *xn,
+		int     top,
+		cxobj **xap)
+{
+    int        retval = -1;
+    cxobj     *xc = NULL;
+    yang_stmt *yc;
+
+    while ((xc = xml_child_each(xn, xc, CX_ELMNT)) != NULL) {
+	if ((yc = xml_spec(xc)) == NULL)
+	    continue;
+	if (!top && yang_keyword_get(yc) == Y_ACTION){
+	    *xap = xc;
+	    break;
+	}
+	if (yang_keyword_get(yc) != Y_CONTAINER && yang_keyword_get(yc) != Y_LIST)
+	    continue;
+	/* XXX check key */
+	if (xml_find_action(xc, 0, xap) < 0)
+	    goto done;
+	break;
+    }
+    retval = 0;
+ done:
+    return retval;
+}

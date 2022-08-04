@@ -59,7 +59,6 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <netinet/in.h>
-#include <libgen.h>
 
 /* cligen */
 #include <cligen/cligen.h>
@@ -81,6 +80,7 @@
 #include "clixon_data.h"
 #include "clixon_options.h"
 #include "clixon_yang_parse.h"
+#include "clixon_yang_sub_parse.h"
 #include "clixon_yang_parse_lib.h"
 #include "clixon_yang_cardinality.h"
 #include "clixon_yang_type.h"
@@ -625,7 +625,8 @@ int
 ys_free1(yang_stmt *ys,
 	 int        self)
 {
-    cg_var *cv;
+    cg_var         *cv;
+    rpc_callback_t *rc;
 
     if (ys->ys_argument){
 	free(ys->ys_argument);
@@ -651,6 +652,14 @@ ys_free1(yang_stmt *ys,
 	free(ys->ys_stmt);
     if (ys->ys_filename)
 	free(ys->ys_filename);
+    while((rc = ys->ys_action_cb) != NULL) {
+	DELQ(rc, ys->ys_action_cb, rpc_callback_t *);
+	if (rc->rc_namespace)
+	    free(rc->rc_namespace);
+	if (rc->rc_name)
+	    free(rc->rc_name);
+	free(rc);
+    }
     if (self){
 	free(ys);
 	_stats_yang_nr--;
@@ -664,6 +673,7 @@ ys_free1(yang_stmt *ys,
  * @retval     NULL No such node, nothing done
  * @retval     yc   returned orphaned yang node
  * @see ys_free Deallocate yang node
+ * @see ys_prune_self Prune child itself
  * @note Do not call this in a loop of yang children (unless you know what you are doing)
  */
 yang_stmt *
@@ -696,7 +706,7 @@ ys_prune(yang_stmt *yp,
  * @see ys_free Deallocate yang node
  * @note Do not call this in a loop of yang children (unless you know what you are doing)
  */
-static int
+int
 ys_prune_self(yang_stmt *ys)
 {
     int        retval = -1;
@@ -1106,19 +1116,22 @@ yang_find_datanode(yang_stmt *yn,
 				ysmatch = yc;
 		    }
 		if (ysmatch)
-		    goto match;
+		    goto match; // maybe break?
 	    }
 	} /* Y_CHOICE */
-	else{
-	    if (yang_datanode(ys)){
-		if (argument == NULL)
+	else if (yang_keyword_get(ys) == Y_INPUT ||
+		 yang_keyword_get(ys) == Y_OUTPUT){ /* Look for its children */
+	    if ((ysmatch = yang_find_datanode(ys, argument)) != NULL)
+		break;
+	}
+	else if (yang_datanode(ys)){
+	    if (argument == NULL)
+		ysmatch = ys;
+	    else
+		if (ys->ys_argument && strcmp(argument, ys->ys_argument) == 0)
 		    ysmatch = ys;
-		else
-		    if (ys->ys_argument && strcmp(argument, ys->ys_argument) == 0)
-			ysmatch = ys;
-		if (ysmatch)
-		    goto match;
-	    }
+	    if (ysmatch)
+		goto match; // maybe break?
 	}
     }
     /* Special case: if not match and yang node is module or submodule, extend
@@ -1146,6 +1159,7 @@ yang_find_datanode(yang_stmt *yn,
  * @param[in]  argument   if NULL, match any(first) argument.
  * @note XXX unify code with yang_find_datanode?
  * @see yang_find_datanode
+ * @see yang_abs_schema_nodeid  Top level function
  */
 yang_stmt *
 yang_find_schemanode(yang_stmt *yn, 
@@ -1350,7 +1364,7 @@ yang_find_prefix_by_namespace(yang_stmt *ys,
     goto done;
 }
 
-/*! Given a yang statement and local prefi valid in module , find namespace
+/*! Given a yang statement and local prefix valid in module, find namespace
  *
  * @param[in]  ys        Yang statement in module tree (or module itself)
  * @param[in]  prefix    Local prefix to access module with (direct pointer)
@@ -2130,14 +2144,15 @@ static int
 ys_populate_list(clicon_handle h,
 		 yang_stmt    *ys)
 {
-    yang_stmt  *ykey;
+    yang_stmt *ykey;
+    cvec      *cvv;
     
     if ((ykey = yang_find(ys, Y_KEY, NULL)) == NULL)
 	return 0;
-    if (ys->ys_cvec)
-	cvec_free(ys->ys_cvec);
-    if ((ys->ys_cvec = yang_arg2cvec(ykey, " ")) == NULL)
+
+    if ((cvv = yang_arg2cvec(ykey, " ")) == NULL)
 	return -1;
+    yang_cvec_set(ys, cvv);
     return 0;
 }
 
@@ -2544,10 +2559,11 @@ static int
 ys_populate_unique(clicon_handle h,
 		   yang_stmt    *ys)
 {
-    if (ys->ys_cvec)
-	cvec_free(ys->ys_cvec);
-    if ((ys->ys_cvec = yang_arg2cvec(ys, " ")) == NULL)
+    cvec *cvv;
+
+    if ((cvv = yang_arg2cvec(ys, " ")) == NULL)
 	return -1;
+    yang_cvec_set(ys, cvv);
     return 0;
 }
 
@@ -2767,158 +2783,6 @@ ys_populate2(yang_stmt    *ys,
     return retval;
 }
 
-/*! Handle complexity of if-feature node
- * @param[in] h   Clixon handle
- * @param[in] ys  Yang if-feature statement
- * @retval   -1   Error
- * @retval    0   Feature not enabled: remove yt
- * @retval    1   OK
- * @note if-feature syntax is restricted to single, and, or, syntax, such as "a or b"
- * but RFC7950 allows for nested expr/term/factor syntax.
- * XXX This should really be parsed in yang/lex.
- */
-static int
-yang_if_feature(clicon_handle h,
-		yang_stmt    *ys)
-{
-    int         retval = -1;
-    char      **vec = NULL;
-    int         nvec;
-    char       *f;
-    int         i;
-    int         j;
-    char       *prefix = NULL;
-    char       *feature = NULL;
-    yang_stmt  *ymod;  /* module yang node */
-    yang_stmt  *yfeat; /* feature yang node */
-    int         opand = -1; /* -1:not set, 0:or, 1:and */
-    int         enabled = 0;
-    cg_var     *cv;
-
-    if ((vec = clicon_strsep(ys->ys_argument, " \t\r\n", &nvec)) == NULL)
-	goto done;
-    /* Two steps: first detect operators
-     * Step 1: support "a" or "a or b or c" or "a and b and c "
-     */
-    j = 0;
-    for (i=0; i<nvec; i++){
-	f = vec[i]; 
-	if (strcmp(f, "") == 0) /* skip empty */
-	    continue;
-	if ((j++)%2==0) /* only keep odd i:s 1,3,... */
-	    continue;
-	/* odd i: operator "and" or "or" */
-	if (strcmp(f, "or") == 0){
-	    switch (opand){
-	    case -1:
-		if (i != 1){
-		    clicon_err(OE_YANG, EINVAL, "Syntax error IF_FEATURE \"%s\" (only single if-feature-expr and/or lists allowed)", ys->ys_argument);
-		    goto done;
-		}
-		opand = 0;
-		break;
-	    case 0:
-		break;
-	    case 1:
-		clicon_err(OE_YANG, EINVAL, "Syntax error IF_FEATURE \"%s\" (only single if-feature-expr and/or lists allowed)", ys->ys_argument);
-		goto done;
-		break;
-	    }
-	}
-	else if (strcmp(f, "and") == 0){
-	    switch (opand){
-	    case -1:
-		if (i != 1){
-		    clicon_err(OE_YANG, EINVAL, "Syntax error IF_FEATURE \"%s\" (only single if-feature-expr and/or lists allowed)", ys->ys_argument);
-		    goto done;
-		}
-		opand = 1;
-		break;
-	    case 0:
-		clicon_err(OE_YANG, EINVAL, "Syntax error IF_FEATURE \"%s\" (only single if-feature-expr and/or lists allowed)", ys->ys_argument);
-		goto done;
-		break;
-	    case 1:
-		break;
-	    }
-	}
-	else{
-	    clicon_err(OE_YANG, EINVAL, "Syntax error IF_FEATURE \"%s\" (only single if-feature-expr and/or lists allowed)", ys->ys_argument);
-	    goto done;
-	}
-    } /* for step 1 */
-    if (j%2 == 0){ /* Must be odd: eg a / "a or b" etc */
-	clicon_err(OE_YANG, EINVAL, "Syntax error IF_FEATURE \"%s\" (only single if-feature-expr and/or lists allowed)", ys->ys_argument);
-	goto done;
-    }
-
-    if (opand == -1) /* Uninitialized means single operand */
-	opand = 1;
-    if (opand) /* if AND,  start as enabled, if OR start as disabled */
-	enabled = 1;
-    else
-	enabled = 0;
-    /* Step 2: Boolean operations on operands */
-    j = 0;
-    for (i=0; i<nvec; i++){
-	f = vec[i]; 
-	if (strcmp(f, "") == 0) /* skip empty */
-	    continue;
-	if ((j++)%2==1) /* only keep even i:s 0,2,... */
-	    continue;
-	if (nodeid_split(f, &prefix, &feature) < 0)
-	    goto done;
-	/* Specifically need to handle? strcmp(prefix, myprefix)) */
-	if (prefix == NULL)
-	    ymod = ys_module(ys);
-	else
-	    ymod = yang_find_module_by_prefix(ys, prefix);
-	/* Check if feature exists, and is set, otherwise remove */
-	if ((yfeat = yang_find(ymod, Y_FEATURE, feature)) == NULL){
-	    clicon_err(OE_YANG, EINVAL, "Yang module %s has IF_FEATURE %s, but no such FEATURE statement exists",
-		       ymod?yang_argument_get(ymod):"none",
-		       feature);
-	    goto done;
-	}
-	/* Check if this feature is enabled or not 
-	 * Continue loop to catch unbound features and make verdict at end
-	 */
-	cv = yang_cv_get(yfeat);
-	if (cv == NULL || !cv_bool_get(cv)){    /* disabled */
-	    /* if AND then this is permanently disabled */
-	    if (opand && enabled)
-		enabled = 0;
-	}
-	else{                                                       /* enabled */
-	    /* if OR then this is permanently enabled */
-	    if (!opand && !enabled)
-		enabled = 1;
-	}
-	if (prefix){
-	    free(prefix);
-	    prefix = NULL;
-	}
-	if (feature){
-	    free(feature);
-	    feature = NULL;
-	}
-    }
-    if (!enabled)
-	goto disabled;
-    retval = 1;
- done:
-    if (vec)
-	free(vec); 
-    if (prefix)
-	free(prefix);
-    if (feature)
-	free(feature);
-    return retval;
- disabled: 
-    retval = 0;  /* feature not enabled */
-    goto done;
-}
-
 /*! Find feature and if-feature nodes, check features and remove disabled nodes
  * @param[in] h   Clixon handle
  * @param[in] yt  Yang statement
@@ -2927,7 +2791,7 @@ yang_if_feature(clicon_handle h,
  * @retval    1   OK
  * @note On return 1 the over-lying function need to remove yt from its parent
  * @note cannot use yang_apply here since child-list is modified (destructive) 
- * @note if-feature syntax is restricted to single, and, or, syntax, such as "a or b"
+ * @note if-features is parsed in full context here, previous restricted pass in ys_parse_sub
  */
 int
 yang_features(clicon_handle h,
@@ -2937,14 +2801,21 @@ yang_features(clicon_handle h,
     int        i;
     int        j;
     yang_stmt *ys = NULL;
+    yang_stmt *ymod;
+    const char *mainfile = NULL;
     int        ret;
 
     i = 0;
     while (i<yt->ys_len){
 	ys = yt->ys_stmt[i];
 	if (ys->ys_keyword == Y_IF_FEATURE){
-	    if ((ret = yang_if_feature(h, ys)) < 0)
+	    /* Parse the if-feature-expr string using yang sub-parser */
+	    if ((ymod = ys_module(ys)) != NULL)
+		mainfile = yang_filename_get(ymod);
+	    ret = 0;
+	    if (yang_subparse(yang_argument_get(ys), ys, YA_IF_FEATURE, mainfile, 1, &ret) < 0)
 		goto done;
+	    clicon_debug(1, "%s %s %d", __FUNCTION__, yang_argument_get(ys), ret);
 	    if (ret == 0)
 		goto disabled;
 	}
@@ -3072,6 +2943,7 @@ yang_datanode(yang_stmt *ys)
 /*! All the work for schema_nodeid functions both absolute and descendant
  *
  * @param[in]  yn    Yang node. For absolute schemanodeids this should be a module, otherwise any yang
+ * @param[in]  yspec Yang spec (Cornsercase if yn is pruned)
  * @param[in]  cvv   Schema-node path encoded as a name/value pair list.
  * @param[in]  nsc   Namespace context from yang for the prefixes (names) of cvv
  * @param[out] yres  Result yang statement node, or NULL if not found
@@ -3088,6 +2960,7 @@ yang_datanode(yang_stmt *ys)
  */
 static int
 schema_nodeid_iterate(yang_stmt    *yn,
+		      yang_stmt    *yspec,
 		      cvec         *nodeid_cvv,
 		      cvec         *nsc,
 		      yang_stmt   **yres)
@@ -3100,9 +2973,7 @@ schema_nodeid_iterate(yang_stmt    *yn,
     yang_stmt       *yp;
     cg_var          *cv;
     char            *ns;
-    yang_stmt       *yspec;
 
-    yspec = ys_spec(yn);
     yp = yn;
     /* Iterate over node identifiers /prefix:id/... */
     cv = NULL;    
@@ -3184,8 +3055,11 @@ yang_abs_schema_nodeid(yang_stmt    *yn,
     yang_stmt    *ymod;
     char         *str;
 
+    if ((yspec = ys_spec(yn)) == NULL){
+	clicon_err(OE_YANG, EINVAL, "No yang spec");
+	goto done;
+    }
     *yres = NULL;
-    yspec = ys_spec(yn);
     /* check absolute schema_nodeid */
     if (schema_nodeid[0] != '/'){
 	clicon_err(OE_YANG, EINVAL, "absolute schema nodeid should start with /");
@@ -3233,7 +3107,7 @@ yang_abs_schema_nodeid(yang_stmt    *yn,
 	goto done;
     }
     /* Iterate through cvv to find schemanode using ymod as starting point (since it is absolute) */
-    if (schema_nodeid_iterate(ymod, nodeid_cvv, nsc, yres) < 0)
+    if (schema_nodeid_iterate(ymod, yspec, nodeid_cvv, nsc, yres) < 0)
 	goto done;
  ok:
     retval = 0;
@@ -3246,9 +3120,10 @@ yang_abs_schema_nodeid(yang_stmt    *yn,
 }
 
 /*! Given a descendant schema-nodeid (eg a/b/c) find matching yang spec  
- * @param[in]  yn            Yang node
+ * @param[in]  yn            Yang node (must be part of yspec tree, cannot be "dangling")
  * @param[in]  schema_nodeid Descendant schema-node-id, ie a/b
  * @param[in]  keyword       A schemode of this type, or -1 if any
+ * @param[in]  ns            Namespace context
  * @param[out] yres          First yang node matching schema nodeid
  * @retval     0             OK
  * @retval    -1             Error, with clicon_err called
@@ -3264,10 +3139,15 @@ yang_desc_schema_nodeid(yang_stmt    *yn,
     cvec         *nodeid_cvv = NULL;
     cg_var       *cv;
     char         *str;
+    yang_stmt    *yspec;
     cvec         *nsc = NULL;
     
     if (schema_nodeid == NULL || strlen(schema_nodeid) == 0){
 	clicon_err(OE_YANG, EINVAL, "nodeid is empty");
+	goto done;
+    }
+    if ((yspec = ys_spec(yn)) == NULL){
+	clicon_err(OE_YANG, EINVAL, "No yang spec");
 	goto done;
     }
     *yres = NULL;
@@ -3295,11 +3175,13 @@ yang_desc_schema_nodeid(yang_stmt    *yn,
 	    cv_name_set(cv, NULL);
 	}
     }
-    /* Make a namespace context from yang for the prefixes (names) of nodeid_cvv */
+    /* Make a namespace context from yang for the prefixes (names) of nodeid_cvv 
+     * Requires yn exist in hierarchy
+     */
     if (xml_nsctx_yang(yn, &nsc) < 0)
 	goto done;
     /* Iterate through cvv to find schemanode using yn as relative starting point */
-    if (schema_nodeid_iterate(yn, nodeid_cvv, nsc, yres) < 0)
+    if (schema_nodeid_iterate(yn, yspec, nodeid_cvv, nsc, yres) < 0)
 	goto done;
  ok:
     retval = 0;
@@ -3516,7 +3398,6 @@ yang_key_match(yang_stmt *yn,
 		    retval = 1; /* match */
 		    goto done;
 		}
-
 	    }
 	    cvec_free(cvv);
 	    cvv = NULL;
@@ -3757,7 +3638,7 @@ yang_anydata_add(yang_stmt *yp,
 
 /*! Find extension argument and return if extension exists and its argument value
  *
- * @param[in]  ys     Yang statement where unknown statement may occur referncing to extension
+ * @param[in]  ys     Yang statement where unknown statement may occur referencing to extension
  * @param[in]  name   Name of the extension 
  * @param[in]  ns     The namespace of the module where the extension is defined
  * @param[out] exist  The extension exists.
@@ -3774,7 +3655,7 @@ yang_anydata_add(yang_stmt *yp,
  *        // use extension value
  *     }
  * @endcode
- * @see ys_populate_unknown  Called when parsing YANGo
+ * @see ys_populate_unknown  Called when parsing YANG
  */
 int
 yang_extension_value(yang_stmt *ys,
@@ -3791,6 +3672,10 @@ yang_extension_value(yang_stmt *ys,
     cbuf      *cb = NULL;
     int        ret;
 
+    if (ys == NULL){
+	clicon_err(OE_YANG, EINVAL, "ys is NULL");
+	goto done;
+    }
     if (exist)
 	*exist = 0;
     if ((cb = cbuf_new()) == NULL){
@@ -3993,3 +3878,28 @@ yang_single_child_type(yang_stmt    *ys,
     return 1; /* Passed all tests: yes you can hide this keyword */
 }
 
+/*! Get action callback list
+ * XXX rc shouldnt really be void* but the type definitions in .h file got complicated
+ */
+void *
+yang_action_cb_get(yang_stmt *ys)
+{
+    return ys->ys_action_cb;
+}
+
+/*! Add an action callback to YANG node
+ * XXX rc shouldnt really be void* but the type definitions in .h file got complicated
+ */
+int
+yang_action_cb_add(yang_stmt *ys,
+		   void      *arg)
+{
+    rpc_callback_t *rc = (rpc_callback_t *)arg;
+
+    if (rc == NULL){
+	clicon_err(OE_YANG, EINVAL, "arg is NULL");
+	return -1;
+    }    
+    ADDQ(rc, ys->ys_action_cb);
+    return 0;
+}

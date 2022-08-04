@@ -76,7 +76,8 @@ SRC     = clixon_sig.c clixon_uid.c clixon_log.c clixon_err.c clixon_event.c \
 	  clixon_string.c clixon_regex.c clixon_handle.c clixon_file.c \
 	  clixon_xml.c clixon_xml_io.c clixon_xml_sort.c clixon_xml_map.c clixon_xml_vec.c \
 	  clixon_xml_bind.c clixon_json.c clixon_proc.c \
-	  clixon_yang.c clixon_yang_type.c clixon_yang_module.c clixon_yang_parse_lib.c \
+	  clixon_yang.c clixon_yang_type.c clixon_yang_module.c \
+	  clixon_yang_parse_lib.c clixon_yang_sub_parse.c \
           clixon_yang_cardinality.c clixon_xml_changelog.c clixon_xml_nsctx.c \
 	  clixon_path.c clixon_validate.c \
 	  clixon_hash.c clixon_options.c clixon_data.c clixon_plugin.c \
@@ -85,14 +86,17 @@ SRC     = clixon_sig.c clixon_uid.c clixon_log.c clixon_err.c clixon_event.c \
           clixon_xpath_optimize.c clixon_xpath_yang.c \
 	  clixon_datastore.c clixon_datastore_write.c clixon_datastore_read.c \
 	  clixon_netconf_lib.c clixon_stream.c clixon_nacm.c clixon_client.c clixon_netns.c \
-	  clixon_dispatcher.c
+	  clixon_dispatcher.c clixon_text_syntax.c
 
 YACCOBJS = lex.clixon_xml_parse.o clixon_xml_parse.tab.o \
 	    lex.clixon_yang_parse.o  clixon_yang_parse.tab.o \
 	    lex.clixon_json_parse.o  clixon_json_parse.tab.o \
             lex.clixon_xpath_parse.o clixon_xpath_parse.tab.o \
             lex.clixon_api_path_parse.o clixon_api_path_parse.tab.o \
-            lex.clixon_instance_id_parse.o clixon_instance_id_parse.tab.o 
+            lex.clixon_instance_id_parse.o clixon_instance_id_parse.tab.o \
+            lex.clixon_text_syntax_parse.o clixon_text_syntax_parse.tab.o \
+            lex.clixon_yang_sub_parse.o clixon_yang_sub_parse.tab.o \
+            lex.clixon_yang_schemanode_parse.o clixon_yang_schemanode_parse.tab.o 
 
 # Generated src 
 GENSRC  = build.c 
@@ -117,18 +121,23 @@ endif
 
 clean:
 	rm -f $(OBJS) $(MYLIBLINK) $(MYLIBSTATIC) $(MYLIBDYNAMIC) $(GENOBJS) $(GENSRC) *.core
-	rm -f clixon_xml_parse.tab.[ch] clixon_xml_parse.yy.[co]
-	rm -f clixon_yang_parse.tab.[ch] clixon_yang_parse.[co]
-	rm -f clixon_json_parse.tab.[ch] clixon_json_parse.[co]
-	rm -f clixon_xpath_parse.tab.[ch] clixon_xpath_parse.[co]
-	rm -f clixon_api_path_parse.tab.[ch] clixon_api_path_parse.[co]
-	rm -f clixon_instance_id_parse.tab.[ch] clixon_instance_id_parse.[co]
+	rm -f clixon_xml_parse.tab.[ch] clixon_xml_parse.[o]
+	rm -f clixon_yang_parse.tab.[ch] clixon_yang_parse.[o]
+	rm -f clixon_json_parse.tab.[ch] clixon_json_parse.[o]
+	rm -f clixon_xpath_parse.tab.[ch] clixon_xpath_parse.[o]
+	rm -f clixon_api_path_parse.tab.[ch] clixon_api_path_parse.[o]
+	rm -f clixon_instance_id_parse.tab.[ch] clixon_instance_id_parse.[o]
+	rm -f clixon_text_syntax_parse.tab.[ch] clixon_text_syntax_parse.[o]
+	rm -f clixon_yang_sub_parse.tab.[ch] clixon_yang_sub_parse.[o]
+	rm -f clixon_yang_schemanode_parse.tab.[ch] clixon_yang_schemanode_parse.[o]
 	rm -f lex.clixon_xml_parse.c
 	rm -f lex.clixon_yang_parse.c
 	rm -f lex.clixon_json_parse.c
 	rm -f lex.clixon_xpath_parse.c
 	rm -f lex.clixon_api_path_parse.c
 	rm -f lex.clixon_instance_id_parse.c
+	rm -f lex.clixon_text_syntax_parse.c
+	rm -f lex.clixon_yang_sub_parse.c
 	rm -f *.gcda *.gcno *.gcov # coverage
 
 #############################################################################
@@ -219,6 +228,45 @@ clixon_instance_id_parse.tab.h: clixon_instance_id_parse.y
 clixon_instance_id_parse.tab.c:	clixon_instance_id_parse.tab.h
 
 lex.clixon_instance_id_parse.o : lex.clixon_instance_id_parse.c clixon_instance_id_parse.tab.h
+	$(CC) $(INCLUDES) $(CPPFLAGS) $(CFLAGS) -Wno-error -c $<
+
+# text syntax parser
+lex.clixon_text_syntax_parse.c : clixon_text_syntax_parse.l clixon_text_syntax_parse.tab.h
+	$(LEX) -Pclixon_text_syntax_parse clixon_text_syntax_parse.l # -d is debug
+
+clixon_text_syntax_parse.tab.h: clixon_text_syntax_parse.y
+	$(YACC) -l -d -b clixon_text_syntax_parse -p clixon_text_syntax_parse clixon_text_syntax_parse.y # -t is debug
+
+# extra rule to avoid parallell yaccs
+clixon_text_syntax_parse.tab.c:	clixon_text_syntax_parse.tab.h
+
+lex.clixon_text_syntax_parse.o : lex.clixon_text_syntax_parse.c clixon_text_syntax_parse.tab.h
+	$(CC) $(INCLUDES) $(CPPFLAGS) $(CFLAGS) -Wno-error -c $<
+
+# yang-sub parser
+lex.clixon_yang_sub_parse.c : clixon_yang_sub_parse.l clixon_yang_sub_parse.tab.h
+	$(LEX) -Pclixon_yang_sub_parse clixon_yang_sub_parse.l # -d is debug
+
+clixon_yang_sub_parse.tab.h: clixon_yang_sub_parse.y
+	$(YACC) -l -d -b clixon_yang_sub_parse -p clixon_yang_sub_parse clixon_yang_sub_parse.y # -t is debug
+
+# extra rule to avoid parallell yaccs
+clixon_yang_sub_parse.tab.c:	clixon_yang_sub_parse.tab.h
+
+lex.clixon_yang_sub_parse.o : lex.clixon_yang_sub_parse.c clixon_yang_sub_parse.tab.h
+	$(CC) $(INCLUDES) $(CPPFLAGS) $(CFLAGS) -Wno-error -c $<
+
+# descendant-schema-nodeid parser
+lex.clixon_yang_schemanode_parse.c : clixon_yang_schemanode_parse.l clixon_yang_schemanode_parse.tab.h
+	$(LEX) -Pclixon_yang_schemanode_parse clixon_yang_schemanode_parse.l # -d is debug
+
+clixon_yang_schemanode_parse.tab.h: clixon_yang_schemanode_parse.y
+	$(YACC) -l -d -b clixon_yang_schemanode_parse -p clixon_yang_schemanode_parse clixon_yang_schemanode_parse.y # -t is debug
+
+# extra rule to avoid parallell yaccs
+clixon_yang_schemanode_parse.tab.c:	clixon_yang_schemanode_parse.tab.h
+
+lex.clixon_yang_schemanode_parse.o : lex.clixon_yang_schemanode_parse.c clixon_yang_schemanode_parse.tab.h
 	$(CC) $(INCLUDES) $(CPPFLAGS) $(CFLAGS) -Wno-error -c $<
 
 distclean: clean

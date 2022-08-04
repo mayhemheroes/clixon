@@ -50,8 +50,6 @@ typedef enum yang_class yang_class;
  * Prototypes
  */
 int isxmlns(cxobj *x);
-int xml2txt_cb(FILE *f, cxobj *x, clicon_output_cb *fn);
-int xml2txt(FILE *f, cxobj *x, int level);
 int xmlns_assign(cxobj *x);
 int xml2cvec(cxobj *xt, yang_stmt *ys, cvec **cvv0);
 int cvec2xml_1(cvec *cvv, char *toptag, cxobj *xp, cxobj **xt0);
@@ -72,8 +70,12 @@ int xml2xpath(cxobj *x, cvec *nsc, char **xpath);
 int assign_namespace_element(cxobj *x0, cxobj *x1, cxobj *x1p);
 int assign_namespace_body(cxobj *x0, cxobj *x1);
 int xml_merge(cxobj *x0, cxobj *x1, yang_stmt *yspec, char **reason);
+int yang_valstr2enum(yang_stmt *ytype, char *valstr, char **enumstr);
+int yang_enum2valstr(yang_stmt *ytype, char *enumstr, char **valstr);
 int yang_enum_int_value(cxobj *node, int32_t *val);
 int xml_copy_marked(cxobj *x0, cxobj *x1);
 int yang_check_when_xpath(cxobj *xn, cxobj *xp, yang_stmt *yn, int *hit, int *nrp, char **xpathp);
+int xml_rpc_isaction(cxobj *xn);
+int xml_find_action(cxobj *xn, int top, cxobj **xap);
 
 #endif  /* _CLIXON_XML_MAP_H_ */

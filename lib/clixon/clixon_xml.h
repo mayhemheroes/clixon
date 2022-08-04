@@ -178,6 +178,7 @@ typedef struct clixon_xml_vec clixon_xvec; /* struct defined in clicon_xml_vec.c
 #define XML_FLAG_NONE      0x20 /* Node is added as NONE */
 #define XML_FLAG_DEFAULT   0x40 /* Added when a value is set as default @see xml_default */
 #define XML_FLAG_TOP       0x80 /* Top datastore symbol */
+#define XML_FLAG_BODYKEY  0x100 /* Text parsing key to be translated from body to key */
 
 /*
  * Prototypes
@@ -225,6 +226,7 @@ cxobj    *xml_child_each(cxobj *xparent, cxobj *xprev,  enum cxobj_type type);
 int       xml_child_insert_pos(cxobj *x, cxobj *xc, int i);
 int       xml_childvec_set(cxobj *x, int len);
 cxobj   **xml_childvec_get(cxobj *x);
+int       clixon_child_xvec_append(cxobj *x, clixon_xvec *xv);
 cxobj    *xml_new(char *name, cxobj *xn_parent, enum cxobj_type type);
 cxobj    *xml_new_body(char *name, cxobj *parent, char *val);
 yang_stmt *xml_spec(cxobj *x);

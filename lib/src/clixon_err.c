@@ -124,6 +124,7 @@ static struct errvec EV[] = {
     {"Undefined",              OE_UNDEF},
     /* From here error extensions using clixon_err_cat_reg */
     {"OpenSSL error",          OE_SSL},
+    {"SNMP error",             OE_SNMP},
     {"Nghttp2 error",          OE_NGHTTP2},
     {NULL,                     -1}
 };
@@ -238,30 +239,48 @@ clicon_err_fn(const char *fn,
 	if (cec->cec_logfn(cec->cec_handle, suberr, cb) < 0)
 	    goto done;
 	/* Here we could take care of specific errno, like application-defined errors */
-	clicon_log(LOG_ERR, "%s: %d: %s: %s: %s",
-		   fn,
-		   line,
-		   clicon_strerror(category),
-		   cbuf_get(cb),
-		   msg);
+	if (fn)
+	    clicon_log(LOG_ERR, "%s: %d: %s: %s: %s",
+		       fn,
+		       line,
+		       clicon_strerror(category),
+		       cbuf_get(cb),
+		       msg);
+	else
+	    clicon_log(LOG_ERR, "%s: %s: %s",
+		       clicon_strerror(category),
+		       cbuf_get(cb),
+		       msg);
 	if (cb)
 	    cbuf_free(cb);
     }
     else if (suberr){   /* Actually log it */
 	/* Here we could take care of specific errno, like application-defined errors */
-	clicon_log(LOG_ERR, "%s: %d: %s: %s: %s", 
-		   fn,
-		   line,
-		   clicon_strerror(category),
-		   msg,
-		   suberr==XMLPARSE_ERRNO?"XML parse error":strerror(suberr));
+	if (fn)
+	    clicon_log(LOG_ERR, "%s: %d: %s: %s: %s", 
+		       fn,
+		       line,
+		       clicon_strerror(category),
+		       msg,
+		       suberr==XMLPARSE_ERRNO?"XML parse error":strerror(suberr));
+	else
+	    clicon_log(LOG_ERR, "%s: %s: %s", 
+		       clicon_strerror(category),
+		       msg,
+		       suberr==XMLPARSE_ERRNO?"XML parse error":strerror(suberr));
     }
-    else
-	clicon_log(LOG_ERR, "%s: %d: %s: %s", 
-		   fn,
-		   line,
-		   clicon_strerror(category),
-		   msg);
+    else{
+	if (fn)
+	    clicon_log(LOG_ERR, "%s: %d: %s: %s", 
+		       fn,
+		       line,
+		       clicon_strerror(category),
+		       msg);
+	else
+	    clicon_log(LOG_ERR, "%s: %s", 
+		       clicon_strerror(category),
+		       msg);
+    }
     retval = 0;
   done:
     if (msg)

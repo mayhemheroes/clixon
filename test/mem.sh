@@ -18,6 +18,7 @@ function memonce(){
     clixon_netconf=
     clixon_backend=
     clixon_restconf=
+    clixon_snmp=
     case "$what" in
 	'cli')
 	    valgrindtest=1
@@ -43,8 +44,15 @@ function memonce(){
 	    clixon_restconf="/usr/bin/valgrind --num-callers=50 --leak-check=full --show-leak-kinds=all --suppressions=./valgrind-clixon.supp --track-fds=yes --trace-children=no  --child-silent-after-fork=yes --log-file=$valgrindfile clixon_restconf"
 
 	    ;;
+	'snmp')
+	    valgrindtest=4 # This means snmp valgrind test
+            sudo chmod 660 $valgrindfile
+	    : ${DEMWAIT:=15} # valgrind snmp needs some time to get up
+	    clixon_snmp="/usr/bin/valgrind --num-callers=50 --leak-check=full --show-leak-kinds=all --suppressions=./valgrind-clixon.supp --track-fds=yes --trace-children=no  --child-silent-after-fork=yes --log-file=$valgrindfile clixon_snmp"
+	    ;;
+
 	*)
-	    echo "usage: $0 cli|netconf|restconf|backend" # valgrind memleak checks
+	    echo "usage: $0 cli|netconf|restconf|backend|snmp" # valgrind memleak checks
 	    rm -f $valgrindfile
 	    exit -1
 	    ;;
@@ -53,6 +61,12 @@ function memonce(){
 
     memerr=0
     for test in $pattern; do
+	# Can happen if no pattern, eg pattern=foo but "foo" does not exist
+	if [ ! -f $test ]; then
+	    echo -e "\e[31mNo such file: $test"
+	    echo -ne "\e[0m"
+	    exit -1
+	fi
 	if [ $testnr != 0 ]; then echo; fi
 	perfnr=1000 # Limit performance tests
 	testfile=$test
@@ -86,16 +100,16 @@ function println(){
 }
 
 if [ -z "$*" ]; then
-    cmds="backend restconf cli netconf"
+    cmds="backend restconf cli netconf snmp"
 else
     cmds=$*
 fi
 
 # First run sanity
 for c in $cmds; do
-    if [ $c != cli -a $c != netconf -a $c != restconf -a $c != backend ]; then
+    if [ $c != cli -a $c != netconf -a $c != restconf -a $c != backend -a $c != snmp ]; then
 	echo "c:$c"
-	echo "usage: $0 [cli|netconf|restconf|backend]+" 
+	echo "usage: $0 [cli|netconf|restconf|backend|snmp]+"
 	echo "          with no args run all"
 	exit -1
     fi

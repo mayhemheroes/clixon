@@ -203,13 +203,16 @@ clixon_xvec_i(clixon_xvec *xv,
  * Used in glue code between clixon_xvec code and cxobj **, size_t code, may go AWAY?
  * @param[in]  xv    XML tree vector
  * @param[out] xvec  XML object vector
+ * @param[out] xlen  Number of elements
+ * @param[out] xmax  Length of allocated vector
  * @retval     0     OK
  * @retval    -1     Error
  */
 int
 clixon_xvec_extract(clixon_xvec *xv,
 		    cxobj     ***xvec,
-		    int         *xlen)
+		    int         *xlen,
+		    int         *xmax)
 {
     int retval = -1;
     
@@ -219,6 +222,8 @@ clixon_xvec_extract(clixon_xvec *xv,
     }
     *xvec = xv->xv_vec;
     *xlen = xv->xv_len;
+    if (xmax)
+	*xmax = xv->xv_max;
     if (xv->xv_vec != NULL){
 	xv->xv_len = 0;
 	xv->xv_max = 0;
@@ -251,6 +256,36 @@ clixon_xvec_append(clixon_xvec *xv,
     if (clixon_xvec_inc(xv) < 0)
 	goto done;
     xv->xv_vec[xv->xv_len-1] = x;
+    retval = 0;
+ done:
+    return retval;
+}
+
+/*! Append a second clixon-xvec into a first
+ *
+ * @param[in,out] xv0   XML tree vector
+ * @param[in]     xv1   XML tree (append this to vector)
+ * @retval        0     OK, with xv0 with new entries from xv1
+ * @retval       -1     Error
+ * @code
+ *  if (clixon_xvec_merge(xv0, xv1) < 0) 
+ *     err;
+ * @endcode
+ */
+int
+clixon_xvec_merge(clixon_xvec *xv0,
+		  clixon_xvec *xv1)
+{
+    int    retval = -1;
+    cxobj *x;
+    int    i;
+
+    for (i=0; i<clixon_xvec_len(xv1); i++){
+	x = clixon_xvec_i(xv1, i);
+	if (clixon_xvec_inc(xv0) < 0)
+	    goto done;
+	xv0->xv_vec[xv0->xv_len-1] = x;
+    }
     retval = 0;
  done:
     return retval;
@@ -333,6 +368,7 @@ clixon_xvec_rm_pos(clixon_xvec *xv,
  * @param[in]  f     UNIX output stream
  * @param[in]  xv    XML tree vector
  * @retval     0     OK
+ * @retval     -1    Error
  */
 int
 clixon_xvec_print(FILE        *f,
@@ -341,7 +377,8 @@ clixon_xvec_print(FILE        *f,
     int i;
     
     for (i=0; i<xv->xv_len; i++)
-	clicon_xml2file(f, xv->xv_vec[i], 0, 1);
+	if (clixon_xml2file(f, xv->xv_vec[i], 0, 1, fprintf, 0, 0) < 0)
+	    return -1;
     return 0;
 }
 

@@ -16,6 +16,7 @@ APPNAME=example
 
 cfg=$dir/conf_yang.xml
 clidir=$dir/cli
+fyang=$dir/clixon-example.yang
 
 test -d ${clidir} || rm -rf ${clidir}
 mkdir $clidir
@@ -27,7 +28,7 @@ cat <<EOF > $cfg
   <CLICON_CONFIGFILE>$cfg</CLICON_CONFIGFILE>
   <CLICON_YANG_DIR>${YANG_INSTALLDIR}</CLICON_YANG_DIR>
   <CLICON_YANG_DIR>$IETFRFC</CLICON_YANG_DIR>
-  <CLICON_YANG_MODULE_MAIN>clixon-example</CLICON_YANG_MODULE_MAIN>
+  <CLICON_YANG_MAIN_FILE>$fyang</CLICON_YANG_MAIN_FILE>
   <CLICON_BACKEND_DIR>/usr/local/lib/$APPNAME/backend</CLICON_BACKEND_DIR>
   <CLICON_CLI_MODE>$APPNAME</CLICON_CLI_MODE>
   <CLICON_CLI_DIR>/usr/local/lib/$APPNAME/cli</CLICON_CLI_DIR>
@@ -36,6 +37,70 @@ cat <<EOF > $cfg
   <CLICON_BACKEND_PIDFILE>/usr/local/var/$APPNAME/$APPNAME.pidfile</CLICON_BACKEND_PIDFILE>
   <CLICON_XMLDB_DIR>/usr/local/var/$APPNAME</CLICON_XMLDB_DIR>
 </clixon-config>
+EOF
+
+cat <<EOF > $fyang
+module clixon-example {
+    yang-version 1.1;
+    namespace "urn:example:clixon";
+    prefix ex;
+    import ietf-interfaces { 
+	prefix if;
+    }
+    import ietf-ip {
+	prefix ip;
+    }
+    import iana-if-type {
+	prefix ianaift;
+    }
+    import clixon-autocli{
+	prefix autocli;
+    }
+    /* Example interface type for tests, local callbacks, etc */
+    identity eth {
+	base if:interface-type;
+    }
+    /* Generic config data */
+    container table{
+	list parameter{
+	    key name;
+	    leaf name{
+		type string;
+	    }
+	    leaf value{
+		type string;
+	    }
+	}
+    }
+    rpc example {
+	description "Some example input/output for testing RFC7950 7.14.
+                     RPC simply echoes the input for debugging.";
+	input {
+	    leaf x {
+		description
+         	    "If a leaf in the input tree has a 'mandatory' statement with
+                   the value 'true', the leaf MUST be present in an RPC invocation.";
+		type string;
+		mandatory true;
+	    }
+	    leaf y {
+		description
+		    "If a leaf in the input tree has a 'mandatory' statement with the
+                  value 'true', the leaf MUST be present in an RPC invocation.";
+		type string;
+		default "42";
+	    }
+	}
+	output {
+	    leaf x {
+		type string;
+	    }
+	    leaf y {
+		type string;
+	    }
+	}
+    }
+}
 EOF
 
 cat <<EOF > $clidir/ex.cli
@@ -59,8 +124,6 @@ copy("Copy and create a new object"){
     }
 }
 discard("Discard edits (rollback 0)"), discard_changes();
-
-
 debug("Debugging parts of the system"){
     cli("Set cli debug")	 <level:int32>("Set debug level (0..n)"), cli_debug_cli();
 }
@@ -72,10 +135,22 @@ show("Show a particular state of the system"){
     }
     configuration("Show configuration"), cli_auto_show("datamodel", "candidate", "text", true, false);{
 	    cli("Show configuration as CLI commands"), cli_auto_show("datamodel", "candidate", "cli", true, false, "set ");
+	    xml("Show configuration as XML"), cli_auto_show("datamodel", "candidate", "xml", true, false, "set ");
+	    text("Show configuration as TEXT"), cli_auto_show("datamodel", "candidate", "text", true, false, "set ");
   }
 }
-save("Save candidate configuration to XML file") <filename:string>("Filename (local filename)"), save_config_file("candidate","filename", "xml");
-load("Load configuration from XML file") <filename:string>("Filename (local filename)"),load_config_file("filename", "replace");
+save("Save candidate configuration to XML file") <filename:string>("Filename (local filename)"), save_config_file("candidate","filename", "xml"){
+    cli("Save configuration as CLI commands"), save_config_file("candidate","filename", "cli");
+    xml("Save configuration as XML"), save_config_file("candidate","filename", "xml");
+    json("Save configuration as JSON"), save_config_file("candidate","filename", "json");
+    text("Save configuration as TEXT"), save_config_file("candidate","filename", "text");
+}
+load("Load configuration from XML file") <filename:string>("Filename (local filename)"),load_config_file("filename", "replace");{
+	cli("Replace candidate with file containing CLI commands"), load_config_file("filename", "replace", "cli");
+	xml("Replace candidate with file containing XML"), load_config_file("filename", "replace", "xml");
+	json("Replace candidate with file containing JSON"), load_config_file("filename", "replace", "json");
+	text("Replace candidate with file containing TEXT"), load_config_file("filename", "replace", "text");
+}
 
 rpc("example rpc") <a:string>("routing instance"), example_client_rpc("");
 
@@ -154,22 +229,19 @@ new "cli success validate"
 expectpart "$($clixon_cli -1 -f $cfg -l o validate)" 0 "^$"
 
 new "cli compare diff"
-expectpart "$($clixon_cli -1 -f $cfg -l o show compare text)" 0 "+                ip 1.2.3.4;"
+expectpart "$($clixon_cli -1 -f $cfg -l o show compare text)" 0 "+            address 1.2.3.4"
 
 new "cli start shell"
 expectpart "$($clixon_cli -1 -f $cfg -l o shell echo foo)" 0 "foo" 
 
-new "cli commit"
-expectpart "$($clixon_cli -1 -f $cfg -l o commit)" 0 "^$"
-
 new "cli save"
-expectpart "$($clixon_cli -1 -f $cfg -l o save $dir/foo)" 0 "^$"
+expectpart "$($clixon_cli -1 -f $cfg -l o save $dir/foo cli)" 0 "^$"
 
 new "cli delete all"
 expectpart "$($clixon_cli -1 -f $cfg -l o delete all)" 0 "^$"
 
 new "cli load"
-expectpart "$($clixon_cli -1 -f $cfg -l o load $dir/foo)" 0 "^$"
+expectpart "$($clixon_cli -1 -f $cfg -l o load $dir/foo cli)" 0 "^$"
 
 new "cli check load"
 expectpart "$($clixon_cli -1 -f $cfg -l o show conf cli)" 0 "interfaces interface eth/0/0 ipv4 enabled true"

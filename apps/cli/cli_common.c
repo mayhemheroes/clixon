@@ -325,7 +325,7 @@ cli_dbxml(clicon_handle       h,
 	clicon_err(OE_XML, errno, "cbuf_new");
 	goto done;
     }
-    if (clicon_xml2cbuf(cb, xtop, 0, 0, -1) < 0)
+    if (clixon_xml2cbuf(cb, xtop, 0, 0, -1, 0) < 0)
 	goto done;
     if (clicon_rpc_edit_config(h, "candidate", OP_NONE, cbuf_get(cb)) < 0)
 	goto done;
@@ -675,16 +675,15 @@ cli_validate(clicon_handle h,
 /*! Compare two dbs using XML. Write to file and run diff
  */
 static int
-compare_xmls(cxobj *xc1, 
-	     cxobj *xc2, 
-	     int    astext)
+compare_xmls(cxobj           *xc1,
+	     cxobj           *xc2,
+	     enum format_enum format)
 {
     int    fd;
     FILE  *f;
     char   filename1[MAXPATHLEN];
     char   filename2[MAXPATHLEN];
     int    retval = -1;
-    cxobj *xc;
     cbuf  *cb = NULL;
 
     snprintf(filename1, sizeof(filename1), "/tmp/cliconXXXXXX");
@@ -695,14 +694,17 @@ compare_xmls(cxobj *xc1,
     }
     if ((f = fdopen(fd, "w")) == NULL)
 	goto done;
-    xc = NULL;
-    if (astext)
-	while ((xc = xml_child_each(xc1, xc, -1)) != NULL)
-	    xml2txt_cb(f, xc, cligen_output);
-    else
-	while ((xc = xml_child_each(xc1, xc, -1)) != NULL)
-	    clicon_xml2file_cb(f, xc, 0, 1, cligen_output);
-
+    switch(format){
+    case FORMAT_TEXT:
+	if (clixon_txt2file(f, xc1, 0, cligen_output, 1, 1) < 0)
+	    goto done;
+	break;
+    case FORMAT_XML:
+    default:
+	if (clixon_xml2file(f, xc1, 0, 1, cligen_output, 1, 1) < 0)
+	    goto done;
+	break;
+    }
     fclose(f);
     close(fd);
 
@@ -712,13 +714,19 @@ compare_xmls(cxobj *xc1,
     }
     if ((f = fdopen(fd, "w")) == NULL)
 	goto done;
-    xc = NULL;
-    if (astext)
-	while ((xc = xml_child_each(xc2, xc, -1)) != NULL)
-	    xml2txt_cb(f, xc, cligen_output);
-    else
-	while ((xc = xml_child_each(xc2, xc, -1)) != NULL)
-	    clicon_xml2file_cb(f, xc, 0, 1, cligen_output);
+
+    switch(format){
+    case FORMAT_TEXT:
+	if (clixon_txt2file(f, xc2, 0, cligen_output, 1, 1) < 0)
+	    goto done;
+	break;
+    case FORMAT_XML:
+    default:
+	if (clixon_xml2file(f, xc2, 0, 1, cligen_output, 1, 1) < 0)
+	    goto done;
+	break;
+    }
+
     fclose(f);
     close(fd);
 
@@ -754,16 +762,16 @@ compare_dbs(clicon_handle h,
     cxobj *xc2 = NULL; /* candidate xml */
     cxobj *xerr = NULL;
     int    retval = -1;
-    int    astext;
+    enum format_enum format;
 
     if (cvec_len(argv) > 1){
 	clicon_err(OE_PLUGIN, EINVAL, "Requires 0 or 1 element. If given: astext flag 0|1");
 	goto done;
     }
-    if (cvec_len(argv))
-	astext = cv_int32_get(cvec_i(argv, 0));
+    if (cvec_len(argv) && cv_int32_get(cvec_i(argv, 0)) == 1)
+	format = FORMAT_TEXT;
     else
-	astext = 0;
+	format = FORMAT_XML;
     if (clicon_rpc_get_config(h, NULL, "running", "/", NULL, &xc1) < 0)
 	goto done;
     if ((xerr = xpath_first(xc1, NULL, "/rpc-error")) != NULL){
@@ -776,7 +784,7 @@ compare_dbs(clicon_handle h,
 	clixon_netconf_error(xerr, "Get configuration", NULL);
 	goto done;
     }
-    if (compare_xmls(xc1, xc2, astext) < 0) /* astext? */
+    if (compare_xmls(xc1, xc2, format) < 0) /* astext? */
 	goto done;
     retval = 0;
   done:
@@ -789,6 +797,7 @@ compare_dbs(clicon_handle h,
 
 /*! Load a configuration file to candidate database
  * Utility function used by cligen spec file
+ * Note that the CLI function makes no Validation of the XML sent to the backend
  * @param[in] h     CLICON handle
  * @param[in] cvv   Vector of variables (where <varname> is found)
  * @param[in] argv  A string: "<varname> <operation> [<format>]"
@@ -819,11 +828,12 @@ load_config_file(clicon_handle h,
     FILE            *fp = NULL;
     cxobj           *xt = NULL;
     cxobj           *x;
-    cbuf            *cbxml;
+    cbuf            *cbxml = NULL;
     char            *formatstr = NULL;
     enum format_enum format = FORMAT_XML;
     yang_stmt       *yspec;
     cxobj           *xerr = NULL; 
+    char            *lineptr = NULL;
 
     if (cvec_len(argv) < 2 || cvec_len(argv) > 4){
 	clicon_err(OE_PLUGIN, EINVAL, "Received %d arguments. Expected: <dbname>,<varname>[,<format>]",
@@ -882,12 +892,22 @@ load_config_file(clicon_handle h,
 	    goto done;
 	}
 	break;
+    case FORMAT_TEXT:
+	/* text parser requires YANG and since load/save files have a "config" top-level 
+	 * the yang-bind parameter must be YB_MODULE_NEXT
+	 */
+	if ((ret = clixon_text_syntax_parse_file(fp, YB_MODULE_NEXT, yspec, &xt, &xerr)) < 0)
+	    goto done;
+	if (ret == 0){
+	    clixon_netconf_error(xerr, "Loading", filename);
+	    goto done;
+	}
+	break;
     case FORMAT_CLI:
 	{
 	    char         *mode = cli_syntax_mode(h);
 	    cligen_result result;            /* match result */
 	    int           evalresult = 0;    /* if result == 1, calback result */
-	    char         *lineptr = NULL;
 	    size_t        n;
 
 	    while(!cligen_exiting(cli_cligen(h))) {
@@ -925,18 +945,21 @@ load_config_file(clicon_handle h,
     while ((x = xml_child_each(xt, x, -1)) != NULL) {
 	/* Read as datastore-top but transformed into an edit-config "config" */
 	xml_name_set(x, NETCONF_INPUT_CONFIG);
-	if (clicon_xml2cbuf(cbxml, x, 0, 0, -1) < 0)
-	    goto done;
     }
+    if (clixon_xml2cbuf(cbxml, xt, 0, 0, -1, 1) < 0)
+	goto done;
     if (clicon_rpc_edit_config(h, "candidate",
 			       replace?OP_REPLACE:OP_MERGE, 
 			       cbuf_get(cbxml)) < 0)
 	goto done;
-    cbuf_free(cbxml);
  ok:
     ret = 0;
  done:
-    if (xerr)
+    if (cbxml)
+	cbuf_free(cbxml);
+    if (lineptr)
+	free(lineptr); 
+   if (xerr)
 	xml_free(xerr);
     if (xt)
 	xml_free(xt);
@@ -973,7 +996,6 @@ save_config_file(clicon_handle h,
     char              *dbstr;
     char              *varstr;
     cxobj             *xt = NULL;
-    cxobj             *x;
     cxobj             *xerr;
     FILE              *f = NULL;
     char              *formatstr;
@@ -1027,29 +1049,26 @@ save_config_file(clicon_handle h,
     } 
     switch (format){
     case FORMAT_XML:
-	if (clicon_xml2file(f, xt, 0, pretty) < 0)
+	if (clixon_xml2file(f, xt, 0, pretty, fprintf, 0, 1) < 0)
 	    goto done;
 	break;
     case FORMAT_JSON:
-	if (xml2json(f, xt, pretty) < 0)
+	if (clixon_json2file(f, xt, pretty, fprintf, 0, 1) < 0)
 	    goto done;
 	break;
     case FORMAT_TEXT:
-	if (xml2txt(f, xt, 0) < 0)
+	if (clixon_txt2file(f, xt, 0, fprintf, 0, 1) < 0)
 	    goto done;
 	break;
     case FORMAT_CLI:
-	x = NULL;
-	while ((x = xml_child_each(xt, x, CX_ELMNT)) != NULL) {
-	    if (xml2cli(h, f, x, prefix, fprintf) < 0)
-		goto done;
-	}
+	if (clixon_cli2file(h, f, xt, prefix, fprintf, 1) < 0)
+	    goto done;
 	break;
     case FORMAT_NETCONF:
 	fprintf(f, "<rpc xmlns=\"%s\" %s><edit-config><target><candidate/></target>",
 		NETCONF_BASE_NAMESPACE, NETCONF_MESSAGE_ID_ATTR);
 	fprintf(f, "\n");
-	if (clicon_xml2file(f, xt, 0, pretty) < 0)
+	if (clixon_xml2file(f, xt, 0, pretty, fprintf, 0, 1) < 0)
 	    goto done;
 	fprintf(f, "</edit-config></rpc>]]>]]>\n");
 	break;
@@ -1131,8 +1150,6 @@ cli_notification_cb(int   s,
     int                eof;
     int                retval = -1;
     cxobj             *xt = NULL;
-    cxobj             *xe;
-    cxobj             *x;
     enum format_enum   format = (enum format_enum)arg;
     int                ret;
     
@@ -1153,28 +1170,20 @@ cli_notification_cb(int   s,
 	clicon_err(OE_NETCONF, EFAULT, "Notification malformed");
 	goto done;
     }
-    if ((xe = xpath_first(xt, NULL, "//event")) != NULL){
-	x = NULL;
-	while ((x = xml_child_each(xe, x, -1)) != NULL) {
-	    switch (format){
-	    case FORMAT_XML:
-		if (clicon_xml2file_cb(stdout, x, 0, 1, cligen_output) < 0)
-		    goto done;
-		break;
-	    case FORMAT_TEXT:
-		if (xml2txt_cb(stdout, x, cligen_output) < 0)
-		    goto done;
-		break;
-	    case FORMAT_JSON:
-		if (xml2json_cb(stdout, x, 1, cligen_output) < 0)
-		    goto done;
-		break;
-	    default:
-		break;
-	    }
-	    if (cli_output_status() < 0)
-		break;
-	}
+    switch (format){
+    case FORMAT_JSON:
+	if (clixon_json2file(stdout, xt, 1, cligen_output, 1, 1) < 0)
+	    goto done;
+    case FORMAT_TEXT:
+	if (clixon_txt2file(stdout, xt, 0, cligen_output, 1, 1) < 0)
+	    goto done;
+	break;
+    case FORMAT_XML:
+	if (clixon_xml2file(stdout, xt, 0, 1, cligen_output, 1, 1) < 0)
+	    goto done;
+	break;
+    default:
+	break;
     }
     retval = 0;
   done:
@@ -1417,7 +1426,8 @@ cli_copy_config(clicon_handle h,
     /* resuse cb */
     cbuf_reset(cb);
     /* create xml copy tree and merge it with database configuration */
-    clicon_xml2cbuf(cb, x2, 0, 0, -1);
+    if (clixon_xml2cbuf(cb, x2, 0, 0, -1, 0) < 0)
+	goto done;
     if (clicon_rpc_edit_config(h, db, OP_MERGE, cbuf_get(cb)) < 0)
 	goto done;
     retval = 0;

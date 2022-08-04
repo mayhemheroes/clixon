@@ -41,7 +41,7 @@
 /*
  * Types
  */
-typedef struct clixon_xml_vec clixon_xvec; /* struct defined in clicon_xvec.c */
+typedef struct clixon_xml_vec clixon_xvec; /* struct defined in clicon_xml_vec.c */
 
 /*
  * Prototypes
@@ -51,9 +51,10 @@ clixon_xvec *clixon_xvec_dup(clixon_xvec *xv0);
 int          clixon_xvec_free(clixon_xvec *xv);
 int          clixon_xvec_len(clixon_xvec *xv);
 cxobj       *clixon_xvec_i(clixon_xvec *xv, int i);
-int          clixon_xvec_extract(clixon_xvec *xv, cxobj ***xvec, int *xlen);
+int          clixon_xvec_extract(clixon_xvec *xv, cxobj ***xvcec, int *xlen, int *xmax);
 int          clixon_xvec_append(clixon_xvec *xv, cxobj *x);
 int          clixon_xvec_prepend(clixon_xvec *xv, cxobj *x);
+int          clixon_xvec_merge(clixon_xvec *xv0, clixon_xvec *xv1);
 int          clixon_xvec_insert_pos(clixon_xvec *xv, cxobj *x, int i);
 int          clixon_xvec_rm_pos(clixon_xvec *xv, int i);
 int          clixon_xvec_print(FILE *f, clixon_xvec *xv);

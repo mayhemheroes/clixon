@@ -274,6 +274,68 @@ check_when_condition(cxobj              *x0p,
     goto done;
 }
 
+/*! Get cloxest yang case and choice, if any
+ */
+static int
+choice_case_get(yang_stmt  *yc,
+		yang_stmt **ycase,
+		yang_stmt **ychoice)
+{
+    yang_stmt *yp;
+
+    if ((yp = yang_parent_get(yc)) == NULL)
+	return 0;
+    if (yang_keyword_get(yp) == Y_CASE){
+	*ycase = yp;
+	*ychoice = yang_parent_get(yp);
+	return 1;
+    }
+    else if (yang_keyword_get(yp) == Y_CHOICE){
+	*ycase = NULL;
+	*ychoice = yp;
+	return 1;
+    }
+    return 0;
+}
+
+/*! Check if x0/y0 is part of other choice/case than y1 recursively , if so purge 
+ * @retval 0 No, y0 it is not in other case than y1
+ * @retval 1 yes, y0 is in other case than y1
+ */
+static int
+choice_is_other(yang_stmt *y0c,
+		yang_stmt *y0case,
+		yang_stmt *y0choice,
+		yang_stmt *y1c,
+		yang_stmt *y1case,
+		yang_stmt *y1choice)
+{
+    yang_stmt *ycase;
+    yang_stmt *ychoice;
+
+    if (y0choice == y1choice){
+	if ((y0case == NULL && y0c != y1c) ||
+	    y0case != y1case){
+	    return 1;
+	}
+    }
+    else {
+	/* First recurse y0 */
+	if (choice_case_get(y0choice, &ycase, &ychoice)){
+	    if (choice_is_other(y0choice, ycase, ychoice,
+				y1c, y1case, y1choice) == 1)
+		return 1;
+	}
+	/* Second  recurse y1 */
+	if (choice_case_get(y1choice, &ycase, &ychoice)){
+	    if (choice_is_other(y0choice, y0case, y0choice,
+				y1choice, ycase, ychoice) == 1)
+		return 1;
+	}
+    }
+    return 0;
+}
+
 /*! Check if choice nodes and implicitly remove all other cases.
  *
  * Special case is if yc parent (yp) is choice/case
@@ -292,33 +354,20 @@ check_when_condition(cxobj              *x0p,
  * other cases inside the choice.
  */
 static int
-check_delete_existing_case(cxobj     *x0,
-    			   yang_stmt *y1c)
+choice_delete_other(cxobj     *x0,
+		    yang_stmt *y1c)
 {
     int        retval = -1;
-    yang_stmt *yp;
-    yang_stmt *y0p;
-    yang_stmt *y0case;
-    yang_stmt *y1case;
-    yang_stmt *y0choice;
-    yang_stmt *y1choice;
-    yang_stmt *y0c;
     cxobj     *x0c;
     cxobj     *x0prev;
-
-    if ((yp = yang_parent_get(y1c)) == NULL)
+    yang_stmt *y0c;
+    yang_stmt *y0case;
+    yang_stmt *y0choice;
+    yang_stmt *y1case = NULL;
+    yang_stmt *y1choice = NULL;
+    
+    if (choice_case_get(y1c, &y1case, &y1choice) == 0)
 	goto ok;
-    if (yang_keyword_get(yp) == Y_CASE){
-	y1case = yp;
-	y1choice = yang_parent_get(y1case);
-    }
-    else if (yang_keyword_get(yp) == Y_CHOICE){
-	y1case = NULL;
-	y1choice = yp;
-    }
-    else
-	goto ok;
-    /* Now traverse existing tree and compare with choice yang structure of added tree */
     x0prev = NULL;
     x0c = NULL;
     while ((x0c = xml_child_each(x0, x0c, CX_ELMNT)) != NULL) {
@@ -327,27 +376,16 @@ check_delete_existing_case(cxobj     *x0,
 	    x0prev = x0c;
 	    continue;
 	}
-	y0p = yang_parent_get(y0c);
-	if (yang_keyword_get(y0p) == Y_CASE){
-	    y0case = y0p;
-	    y0choice = yang_parent_get(y0case);
-	}
-	else if (yang_keyword_get(y0p) == Y_CHOICE){
-	    y0case = NULL;
-	    y0choice = y0p;
-	}
-	else{
+	if (choice_case_get(y0c, &y0case, &y0choice) == 0){
 	    x0prev = x0c;
 	    continue;
 	}
-	if (y0choice == y1choice){
-	    if ((y0case == NULL && y0c != y1c) ||
-		y0case != y1case){
-		if (xml_purge(x0c) < 0)
-		    goto done;
-		x0c = x0prev;
+	/* Check if x0/y0 is part of other choice/case than y1 recursively , if so purge */
+	if (choice_is_other(y0c, y0case, y0choice, y1c, y1case, y1choice) == 1){
+	    if (xml_purge(x0c) < 0)
+		goto done;
+	    x0c = x0prev;
 		continue;
-	    }
 	}
 	x0prev = x0c;
     }
@@ -772,7 +810,7 @@ text_modify(clicon_handle       h,
 	    /* First pass: Loop through children of the x1 modification tree 
 	     * collect matching nodes from x0 in x0vec (no changes to x0 children)
 	     */
-	    if ((x0vec = calloc(xml_child_nr(x1), sizeof(x1))) == NULL){
+	    if ((x0vec = calloc(xml_child_nr_type(x1, CX_ELMNT), sizeof(x1))) == NULL){
 		clicon_err(OE_UNIX, errno, "calloc");
 		goto done;
 	    }
@@ -807,8 +845,8 @@ text_modify(clicon_handle       h,
 			       x1cname, yang_find_mynamespace(y0));
 		    goto done;
 		}
-		/* Check if existing case should be deleted */
-		if (check_delete_existing_case(x0, yc) < 0)
+		/* Check if existing choice/case should be deleted */
+		if (choice_delete_other(x0, yc) < 0)
 		    goto done;
 		/* See if there is a corresponding node in the base tree */
 		x0c = NULL;
@@ -1206,10 +1244,10 @@ xmldb_put(clicon_handle       h,
     } 
     pretty = clicon_option_bool(h, "CLICON_XMLDB_PRETTY");
     if (strcmp(format,"json")==0){
-	if (xml2json(f, x0, pretty) < 0)
+	if (clixon_json2file(f, x0, pretty, fprintf, 0, 0) < 0)
 	    goto done;
     }
-    else if (clicon_xml2file(f, x0, 0, pretty) < 0)
+    else if (clixon_xml2file(f, x0, 0, pretty, fprintf, 0, 0) < 0)
 	goto done;
     /* Remove modules state after writing to file
      */
@@ -1264,10 +1302,10 @@ xmldb_dump(clicon_handle   h,
     }
     pretty = clicon_option_bool(h, "CLICON_XMLDB_PRETTY");
     if (strcmp(format,"json")==0){
-	if (xml2json(f, xt, pretty) < 0)
+	if (clixon_json2file(f, xt, pretty, fprintf, 0, 0) < 0)
 	    goto done;
     }
-    else if (clicon_xml2file(f, xt, 0, pretty) < 0)
+    else if (clixon_xml2file(f, xt, 0, pretty, fprintf, 0, 0) < 0)
 	goto done;
     retval = 0;
  done:
