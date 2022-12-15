@@ -1,0 +1,5 @@
+project: clixon
+target: clixon-trim
+
+cmds:
+  - cmd: /fuzz_clixon_trim

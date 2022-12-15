@@ -59,7 +59,8 @@ jobs:
       fail-fast: false
       matrix:
         mayhemfile:
-          - mayhem/Mayhemfile
+          - mayhem/Mayhemfile_clixon_trim
+          - mayhem/Mayhemfile_clixon_cli
 
     steps:
       - uses: actions/checkout@v3
