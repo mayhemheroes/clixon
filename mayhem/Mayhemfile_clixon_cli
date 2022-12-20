@@ -1,0 +1,6 @@
+project: clixon
+target: clixon-cli
+
+cmds:
+  - cmd: /install/bin/clixon_cli -f @@
+    filepath: /test.xml
