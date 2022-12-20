@@ -14,10 +14,7 @@ Build clixon netconf statically with the afl-clang compiler:
 ```
   CC=/usr/bin/afl-clang-fast LINKAGE=static ./configure # Dont care about restconf
   make clean
-  cd lib
-  make
-  sudo make install
-  cd ../apps/netconf
+  cd apps/netconf
   make clixon_netconf
   sudo make install
 ```
@@ -30,3 +27,4 @@ Run the script `runfuzz.sh` to run one test with a cli spec and an input string,
 ```
 
 After (or during) the test, investigate results in the output dir.
+

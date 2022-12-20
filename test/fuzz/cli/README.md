@@ -22,10 +22,7 @@ Build clixon cli statically with the afl-clang compiler:
 ```
   CC=/usr/bin/afl-clang-fast LINKAGE=static INSTALLFLAGS="" ./configure # Dont care about restconf
   make clean
-  cd lib
-  make
-  sudo make install
-  cd ../apps/cli
+  cd apps/cli
   make clixon_cli
   sudo make install
 ```
